@@ -509,6 +509,64 @@ A global-config write failure is also logged now rather than surfacing as a bare
 defect: `updateGlobal` used `Effect.orDie` with no context, which is exactly the
 shape of failure where a caller reports success and nothing reached the disk.
 
+### Acceptance test
+
+`bash scripts/acceptance.sh` runs the whole chain the milestone is defined by, in
+one command, under a temporary prefix with its own XDG directories — so it never
+touches the developer's own FreeCode installation and its result does not depend on
+what they configured for themselves.
+
+```
+build -> install -> doctor fails on an empty pool -> setup -> doctor passes
+      -> a real task through model:auto -> isolation -> review -> merge -> resume
+```
+
+`--skip-network` runs everything except the provider setup and the model call.
+The interactive TUI cannot be driven from a script; `run` exercises the same
+session, routing, tools and isolation machinery.
+
+Offline run: **10 passed, 0 failed**. Full run with a real provider: **20 passed,
+5 failed**, and the five are an unresolved finding rather than a test defect —
+see below.
+
+### Open finding: isolation and the shared checkout
+
+The full acceptance run reported `freecode isolated subagent` with a worktree
+directory, and then the subagent's edit landed in the **shared checkout** rather
+than the worktree. The worktree was created and left empty.
+
+Earlier in this session the same check was verified working three times: with a
+source run, and twice with an installed binary, the main checkout stayed unchanged
+and the change appeared only inside the worktree. So this is not a straightforward
+regression, and it is not reproducible on demand.
+
+What is known:
+
+- The isolation call succeeds and logs a worktree under
+  `<project>/.freecode/worktrees/<session>`, including the macOS-canonicalised
+  `/private/var/...` form of a temp directory.
+- In the failing run the edit tool resolved `geom.py` against the project root.
+- A later instrumented attempt did not reproduce it: the main checkout was
+  untouched, and the worktree was also untouched, which means the subagent failed
+  to write at all rather than writing to the wrong place.
+
+So there are two distinct outcomes to separate, and the acceptance test cannot yet
+tell them apart: the subagent writing to the wrong directory, and the subagent
+failing to write. That distinction is the next thing to establish, and the
+instrumentation to do it needs to print the directory the edit tool resolves
+against *and* whether the subagent's turn succeeded. It is recorded here rather
+than papered over because "isolation usually works" is exactly the claim that must
+not go into a release untested.
+
+Two test defects found and fixed while investigating:
+
+1. The acceptance test derived the task id from the worktree **directory name**. git
+   canonicalises paths on macOS, so the derived id did not match what `tasks`
+   reports and the merge check failed for a reason unrelated to FreeCode.
+2. The acceptance test ran against a **stale binary** twice, because it does not
+   rebuild. That is the same trap recorded above, and the script now documents that
+   `bun run package` must run first.
+
 ## Regression check
 
 `bun test test/config test/provider test/freecode` from `packages/opencode`:
