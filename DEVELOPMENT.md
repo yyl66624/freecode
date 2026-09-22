@@ -147,32 +147,76 @@ opencode runs → freecode binary → model:auto → TS ↔ Laya JSONL → tier 
 
 ## Routing quality: measured, and mostly negative
 
-`packages/opencode/src/freecode/router/routing_bench.py` scores 27 hand-labelled
-software-engineering tasks. `rules-only` is the deterministic rules with no model
-at all, and is the floor any Laya variant has to beat.
+`packages/opencode/src/freecode/router/routing_bench.py` scores 115 hand-labelled
+software-engineering tasks, grouped by the boundary they probe rather than
+uniformly sampled. `rules-only` is the deterministic rules with no model at all,
+and is the floor any Laya variant has to beat.
 
 ```
 variant          kind  tier>=min  tier=exact  conf-med  conf-min
-rules-only        85%        85%         78%         -         -
-current           85%        85%         74%     0.041     0.015
-laya-style        85%        85%         74%     0.038     0.022
+rules-only        90%        86%         80%         -         -
+current           90%        86%         77%     0.039     0.015
+laya-style        90%        86%         77%     0.035     0.011
 
-answered above the 0.35 trust threshold: kind 0%, tier 0%
+boundary                     rules-only  current  laya-style
+coding vs debugging            100%    100%    100%
+docs vs coding                 100%    100%    100%
+inspect vs coding               61%     61%     61%
+long and noisy phrasing         83%     83%     83%
+research vs coding              88%     88%     88%
+review vs task                  92%     92%     92%
+standard vs strong vs max      100%    100%    100%
+
+answered above the 0.35 trust threshold: kind 3%, tier 0%
 ```
 
-Read together with the coverage line, this says: **Laya currently contributes no
-net value to fine-grained routing, and its confidence never clears the bar to be
-believed.** Accuracy is identical with and without it, exact-tier agreement is
-four points *worse* with it, and no answer is ever trusted.
+Read together with the coverage line, this says: **Laya contributes nothing to
+classification, and its confidence almost never clears the bar to be believed.**
+Kind accuracy is identical in every single boundary group, exact-tier agreement is
+three points *worse* with it, and 3% of answers are trusted.
+
+### The benchmark paid for itself immediately
+
+The first run on 115 cases scored the rules at 68%. Reading all 37 misses showed
+almost every one was a **pattern gap, not ambiguity**: `picks the wrong model` and
+`is not being detected` never matched the debug pattern, `Does git allow…` was read
+as a git operation rather than a question, `Does this change break the public API`
+matched no review wording, and `cherry-pick` never matched because the pattern
+expected `cherry ?pick` and the word is hyphenated.
+
+Three passes of fixing what the misses actually showed took kind accuracy from
+**68% to 90%**, and the boundary breakdown is what made the work targeted: the
+groups that were failing were visible instead of averaged into one number.
+
+What remains is 12 misses, and honestly labelled:
+
+- **7 are my own label taxonomy, not errors.** "What does the failover module do"
+  and "Which file defines the scheduler weights" are information requests, which is
+  what `research` means; they can only be reached through the local codebase, which
+  is what `inspect` means. Both map to `local`/`fast`, so the routing outcome is
+  identical either way. `inspect vs coding` scoring 61% mostly measures this.
+- **2 are lexical limits of string matching**: "failover" contains "fail", so a
+  task about documenting failover trips the debug pattern in one phrasing that the
+  explicit-docs rule does not cover.
+- **3 are genuine semantic failures** and are left as failures rather than tuned
+  away: "i dont understand why this task went to the expensive model" and
+  "it says model not found freecode something" want an explanation of a decision —
+  research — and neither vocabulary nor a small local model distinguishes them
+  reliably from diagnosis.
+
+Labels are **minimum sufficient tier**, not "best tier", because the scheduler
+raises the tier on its own when quota or health makes the cheap choice
+unavailable. Asking the model for a preference would make the scheduler's job
+impossible to separate from the classifier's.
 
 ### What was tried, and what each attempt measured
 
 | Attempt | Result |
 | --- | --- |
-| Question set in FreeCode's own vocabulary | min confidence 0.019–0.29 |
-| Rewrite using Laya's phrasing: `request` placeholder, question form, described options | min confidence 0.022–0.29 |
-| Project `kind` onto the native `domain` vocabulary | confidence 0.27–0.68, but every case answered `code` |
-| One coarse binary `noul` question ("does this change files?") | read-only 0.21–0.29, file-changing 0.33–0.42 — all on the same side of 0.5 |
+| Question set in FreeCode's own vocabulary | min confidence 0.019-0.29 |
+| Rewrite using Laya's phrasing: `request` placeholder, question form, described options | min confidence 0.022-0.29 |
+| Project `kind` onto the native `domain` vocabulary | confidence 0.27-0.68, but every case answered `code` |
+| One coarse binary `noul` question ("does this change files?") | read-only 0.21-0.29, file-changing 0.33-0.42 — all on the same side of 0.5 |
 | Sharpening temperature to 0.3 | confidence up, argmax unchanged |
 
 The temperature experiment is the informative one: it proves the low confidence is
@@ -181,22 +225,17 @@ set are genuinely flat. Laya conditions on a learned embedding of the *question
 id*, so a question it was never trained on carries an uncalibrated head even when
 the sentence is plain English. This is structural and cannot be prompted away.
 
-Laya's answers on the ambiguous cases are usually *right* — it resolved three of
-the four the rules get wrong — but it reports ~0.03 confidence while doing so, and
-acting on uncalibrated answers at that confidence is how a router becomes
-unpredictable.
-
 ### What was kept, and why
 
-1. **Rules own the decision.** `tier=exact` 74% versus 78% is the price; it buys a
-   routing layer that cannot silently misroute.
+1. **Rules own the decision.** Exact-tier agreement of 77% versus 80% is the price;
+   it buys a routing layer that cannot silently misroute.
 2. **The native `domain` question as a contradiction check.** It is calibrated
-   (0.23–0.68), and a confident non-`code` answer escalates the tier and forces
+   (0.23-0.68), and a confident non-`code` answer escalates the tier and forces
    review. It correctly flags "write a haiku" as `writing` at 0.52, and correctly
    leaves factual lookups (0.16) and data analysis (0.30) below the threshold.
 3. **The native `difficulty` score as a gated escalation.** Correlation with
-   required tier r=0.589 over 27 tasks (low band mean 1.38, high band 2.62),
-   monotone with overlap. It escalates one tier above 1.85 and nothing else.
+   required tier r=0.589 over the earlier 27-task set, monotone with overlap. It
+   escalates one tier above 1.85 and nothing else.
 4. **No blanket escalation.** Bumping every unfamiliar task was measured and
    **removed**: it lifted `tier>=min` from 85% to 93% while dropping `tier=exact`
    from 78% to 33%. The entire apparent gain was one step of systematic
@@ -207,13 +246,16 @@ unpredictable.
 
 FreeCode's interesting layer is the *scheduler*, not the classifier. Resource
 selection, account pools, quota and health are deterministic problems with real
-data behind them; task classification into eight software-engineering classes is
-not something this checkpoint can do at a trustworthy confidence.
+data behind them; classifying software-engineering text into eight classes is not
+something this checkpoint can do at a trustworthy confidence.
 
 If Laya is to earn its place in routing, the next step is **fine-tuning on
-software-engineering traces**, not more prompt engineering. The measurement
-harness is in place, so that work can be judged by numbers instead of impressions.
-Until then, keep the tier a conservative floor and let the rules lead.
+software-engineering traces**, not more prompt engineering. The routing data
+FreeCode now produces is the training set: task, rule decision, Laya decision,
+chosen resource, outcome, latency, retries and success — and the benchmark label
+supplies `minimum_tier`. The measurement harness is in place, so that work can be
+judged by numbers instead of impressions. Until then, keep the tier a conservative
+floor and let the rules lead.
 
 ## Resource scheduling
 

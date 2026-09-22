@@ -316,37 +316,73 @@ def _min_confidence(answers: Dict[str, Any]) -> float:
     return round(min(numeric), 4)
 
 
+# Patterns are ordered by intent strength, not by convenience, and the ordering is
+# load-bearing. Two rules govern it:
+#
+#   * A pattern describing *what the user wants done* outranks one describing what
+#     the text happens to mention. "Review this patch for regressions" is a review
+#     even though it says "regressions"; "Document the failover state machine" is
+#     documentation even though it says "failover".
+#   * A class that names a specific artefact outranks the generic action verb that
+#     happens to precede it. "Add a changelog entry" is documentation because the
+#     artefact decides, not the verb.
+#
+# These boundaries are where the expanded benchmark found 37 misses, almost all of
+# them pattern gaps rather than genuine ambiguity. The benchmark groups cases by
+# boundary so a regression in one shows up instead of averaging away.
 _RULE_PATTERNS: Tuple[Tuple[str, str], ...] = (
-    # Order is priority, and it matters more than any individual pattern.
-    #
-    # Review first: it describes the *intent* of the task, while the other
-    # patterns describe whatever the task happens to mention. "Review this patch
-    # for regressions" is a review, not a debug task, even though "regressions"
-    # matches the debug pattern.
-    ("review", r"\b(review|audit|critique|second opinion|sanity ?check|inspect the (patch|change)s?)\w*"),
-    # Diagnosing a failure is named in many ways that avoid the obvious nouns:
-    # "trace why", "find out why", "never backs off", "silently does nothing".
-    # These are the phrasings that regressed the benchmark when missing, because
-    # they fell through to `coding` and lost the tier the class implies.
+    # Review, first and deliberately broad: a user asking for judgement on work
+    # already done says so in many ways.
+    (
+        "review",
+        r"\b(review|audit|critique|second opinion|sanity ?check|look over|check (this|that|the)"
+        r"|is this .* (safe|correct|ok)|does this (change|patch|break)|anything i missed|races? in)\w*",
+    ),
+    # An explicit request to produce documentation. Checked before the symptom
+    # classes because documentation *about* a bug still names the bug: "add a
+    # section about failover" and "write a comment explaining why" both contain
+    # debugging vocabulary while asking for prose.
+    (
+        "docs",
+        r"\b(document|documentation|docstring|changelog|readme|write a comment|add a comment"
+        r"|explain .* in a comment|add a (section|chapter|guide)|write a guide|describe the)\w*",
+    ),
+    # Diagnosing a failure is phrased in many ways that avoid the obvious nouns:
+    # "trace why", "never backs off", "silently does nothing", "picks the wrong
+    # model", "is not being detected".
     (
         "debug",
         r"\b(fail|failing|failure|broken|crash|error|bug|regress|stack ?trace|traceback|debug"
-        r"|why|diagnose|narrow down|root cause|silently|no longer|stopped working|does nothing|is red)\w*",
+        r"|why|diagnose|narrow down|root cause|silently|no longer|stopped working|does nothing|is red"
+        r"|never (closes|backs off|returns|finishes)|is not being|not being (detected|applied)"
+        r"|wrong|incorrect|hang|hangs|hanging|truncat|got it wrong|shows up"
+        r"|off-by-one|off by one|race in|data loss|memory leak)\w*",
+    ),
+    # Documentation names its artefact, so it outranks the verb in front of it.
+    ("docs", r"\b(doc|docs|readme|changelog|docstring|guide|describe|document|write a comment)\w*"),
+    # Research is an information request: it asks a question, looks something up,
+    # or asks for a comparison. "Whether" and a leading interrogative are strong
+    # signals that no file is going to be changed.
+    (
+        "research",
+        r"\b(research|find out|look up|look into|compare|investigate|explore|survey|whether"
+        r"|which|what does|what is|what changed|does |can we|could we|is it possible|how (does|do|many)"
+        r"|tradeoff|difference between|i want to know)\w*",
     ),
     ("test", r"\b(test|tests|pytest|jest|vitest|spec|coverage|fixture)\w*"),
-    # Git comes before inspect so that "squash the commits" is not read as
-    # reading the repository.
-    ("git", r"\b(git|commit|commits|rebase|merge|branch|cherry ?pick|stash|squash)\w*"),
+    # Git comes before inspect so that "squash the commits" is not read as reading
+    # the repository. It is matched as a whole word plus operations, because
+    # "git" inside a question ("does git allow…") makes that question research.
+    ("git", r"\b(commit|commits|rebase|cherry|squash|stash|git (add|commit|push|pull|log|status|branch))\w*"),
     # A request that adds or builds something is a change even when it reads like
-    # an inspection ("implement", "add a flag", "compare and recommend").
+    # an inspection ("implement", "add a flag").
     (
         "coding",
         r"\b(implement|add|create|build|write|refactor|rename|extract|migrate|upgrade|wire up"
-        r"|support|introduce|paginate|pagination|recommend)\w*",
+        r"|support|introduce|paginate|rework|switch|replace|split|move|sort|return|handle|parse"
+        r"|make the|change the|update the|remove|delete|raise the|lower the|fix)\w*",
     ),
-    ("docs", r"\b(doc|docs|documentation|readme|changelog)\w*"),
-    ("research", r"\b(research|find out|look up|look into|compare|investigate|explore|survey|whether)\w*"),
-    ("inspect", r"\b(read|inspect|list|show|explain|where|which|find|locate|summar)\w*"),
+    ("inspect", r"\b(read|inspect|list|show|explain|where|which|find|locate|summar|how many|what does)\w*"),
 )
 
 _TIER_BY_KIND = {

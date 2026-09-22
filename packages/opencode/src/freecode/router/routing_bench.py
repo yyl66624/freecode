@@ -53,43 +53,149 @@ TASK_AGENT = "coder"
 TOOLS = ["read", "edit", "bash"]
 
 # (task text, expected kind, minimum acceptable tier)
-CASES: List[Tuple[str, str, str]] = [
-    # -- debug: diagnose a failure -------------------------------------------------
-    ("Fix the failing data loader test caused by incorrect LOSO subject indexing", "debug", "strong"),
-    ("The server crashes with a KeyError when the cache is cold", "debug", "strong"),
-    ("Trace why the websocket reconnect loop never backs off", "debug", "strong"),
-    ("Users report the export button silently does nothing on Safari", "debug", "strong"),
-    # -- test ----------------------------------------------------------------------
-    ("Add unit tests for the retry helper", "test", "standard"),
-    ("Raise coverage on the payments module to 80 percent", "test", "standard"),
-    ("Write a fixture that builds a temporary git repository", "test", "standard"),
-    # -- coding --------------------------------------------------------------------
-    ("Add a --json flag to the export command", "coding", "standard"),
-    ("Refactor the entire authentication architecture to support multi-tenant sessions", "coding", "max"),
-    ("Implement pagination for the user list endpoint", "coding", "standard"),
-    ("rename the variable foo to bar in utils.ts", "coding", "fast"),
-    ("Design a plugin system for third-party providers", "coding", "max"),
-    # -- inspect -------------------------------------------------------------------
-    ("List every file under src and summarise what each module does", "inspect", "fast"),
-    ("Where is the retry logic implemented", "inspect", "fast"),
-    ("Explain how sessions are persisted between restarts", "inspect", "fast"),
-    ("Show me the database schema for the orders table", "inspect", "fast"),
-    # -- research ------------------------------------------------------------------
-    ("Find out whether the library supports streaming responses", "research", "fast"),
-    ("Compare the two pagination approaches and recommend one", "research", "standard"),
-    ("Look up the current rate limits for the provider API", "research", "fast"),
-    # -- review --------------------------------------------------------------------
-    ("Review this patch for regressions and missing test coverage", "review", "strong"),
-    ("Audit the permission checks in the file server for bypasses", "review", "strong"),
-    ("Give a second opinion on this schema migration", "review", "strong"),
-    # -- docs ----------------------------------------------------------------------
-    ("Add a changelog entry and README section for the new flag", "docs", "standard"),
-    ("Document the public API of the client package", "docs", "standard"),
-    # -- git -----------------------------------------------------------------------
-    ("Rebase this branch onto main and resolve the conflicts", "git", "standard"),
-    ("Squash the last five commits into one", "git", "fast"),
-    ("Cherry-pick the hotfix onto the release branch", "git", "standard"),
+# Cases are grouped by the boundary they probe rather than uniformly sampled.
+# A benchmark full of cases both the rules and the model find easy measures
+# nothing; the pairs below are where a router actually gets things wrong, and the
+# groups exist so a regression in one of them is visible instead of averaged away.
+#
+# Each entry is (task, expected kind, minimum acceptable tier).
+BOUNDARIES: List[Tuple[str, List[Tuple[str, str, str]]]] = [
+    ("inspect vs coding", [
+        ("What does the failover module do", "inspect", "fast"),
+        ("Which file defines the scheduler weights", "inspect", "fast"),
+        ("How many retries does the Upstream policy allow", "inspect", "fast"),
+        ("Show the circuit breaker states", "inspect", "fast"),
+        ("Make the failover module log its decisions", "coding", "standard"),
+        ("Move the scheduler weights into configuration", "coding", "standard"),
+        ("Raise the retry limit in the upstream policy", "coding", "standard"),
+        ("Add a half-open state to the circuit breaker", "coding", "standard"),
+        ("Show me how the retry helper is implemented", "inspect", "fast"),
+        ("Explain what the migration in 0042 does", "inspect", "fast"),
+        ("Where does the request get authenticated", "inspect", "fast"),
+        ("List the public exports of the client package", "inspect", "fast"),
+        ("Summarise what the scheduler module is responsible for", "inspect", "fast"),
+        ("Add a retry helper to the client", "coding", "standard"),
+        ("Change the migration in 0042 to backfill the column", "coding", "standard"),
+        ("Authenticate the request before it reaches the handler", "coding", "standard"),
+        ("Export the scheduler module from the package", "coding", "standard"),
+        ("Split the scheduler module into two files", "coding", "standard"),
+    ]),
+    ("coding vs debugging", [
+        ("Add caching to the model resolver", "coding", "standard"),
+        ("Support a second account for the same provider", "coding", "standard"),
+        ("The resolver picks the wrong model when two tiers overlap", "debug", "strong"),
+        ("Rate limiting is not being detected at all", "debug", "strong"),
+        ("The circuit never closes after a successful probe", "debug", "strong"),
+        ("Some tool calls hang until the request times out", "debug", "strong"),
+        ("Trailing whitespace shows up as a diff in every file", "debug", "strong"),
+        ("Add a --json flag to the export command", "coding", "standard"),
+        ("Implement pagination for the user list endpoint", "coding", "standard"),
+        ("Support multiple providers in the config loader", "coding", "standard"),
+        ("Wire up the new event into the bridge", "coding", "standard"),
+        ("Fix the failing data loader test caused by incorrect LOSO subject indexing", "debug", "strong"),
+        ("The server crashes with a KeyError when the cache is cold", "debug", "strong"),
+        ("Trace why the websocket reconnect loop never backs off", "debug", "strong"),
+        ("Users report the export button silently does nothing on Safari", "debug", "strong"),
+        ("The build is red and nobody knows which commit did it", "debug", "strong"),
+        ("Responses are sometimes truncated, find out why", "debug", "strong"),
+    ]),
+    ("docs vs coding", [
+        ("Explain the scoring formula in a comment", "docs", "standard"),
+        ("Write the migration guide for the new config layout", "docs", "standard"),
+        ("Add a section about failover to the docs", "docs", "standard"),
+        ("Change the scoring weights and update the comment above them", "coding", "standard"),
+        ("Add a docstring to every public function in the module", "docs", "standard"),
+        ("Add a changelog entry and README section for the new flag", "docs", "standard"),
+        ("Document the public API of the client package", "docs", "standard"),
+        ("Write a comment explaining why the retry backoff is capped", "docs", "standard"),
+        ("Update the README install instructions", "docs", "standard"),
+        ("Describe the routing policy in the developer guide", "docs", "standard"),
+        ("Rename the flag and update every call site", "coding", "standard"),
+        ("Add a --verbose option that logs each request", "coding", "standard"),
+        ("Move the retry backoff cap into a named constant", "coding", "standard"),
+    ]),
+    ("research vs coding", [
+        ("Does git allow a worktree inside the repository", "research", "fast"),
+        ("What does the retry-after header look like from this provider", "research", "fast"),
+        ("Look up how the SDK reports rate limits", "research", "fast"),
+        ("Find the documented default for the circuit cooldown", "research", "fast"),
+        ("Which providers support prefix caching", "research", "fast"),
+        ("Parse the retry-after header into a reset time", "coding", "standard"),
+        ("Report rate limits from the SDK to the scheduler", "coding", "standard"),
+        ("Default the circuit cooldown from the provider", "coding", "standard"),
+        ("Find out whether the library supports streaming responses", "research", "fast"),
+        ("Look up the current rate limits for the provider API", "research", "fast"),
+        ("Compare the two pagination approaches and recommend one", "research", "standard"),
+        ("Investigate whether a worktree can be nested inside a repository", "research", "standard"),
+        ("Check what the new version changed in the public API", "research", "fast"),
+        ("Which HTTP client does the SDK use under the hood", "research", "fast"),
+        ("Switch the SDK to streaming responses", "coding", "standard"),
+        ("Replace the pagination approach with cursor-based paging", "coding", "standard"),
+        ("Nest the worktree directory inside the repository", "coding", "standard"),
+    ]),
+    ("review vs task", [
+        ("Look over this diff before I push", "review", "strong"),
+        ("Does this change break the public API", "review", "strong"),
+        ("Sanity check the quota maths in this scorer", "review", "strong"),
+        ("Are there races in this concurrent writer code", "review", "strong"),
+        ("Implement the missing test for the scorer", "test", "standard"),
+        ("Fix the race this review found", "debug", "strong"),
+        ("Review this patch for regressions and missing test coverage", "review", "strong"),
+        ("Audit the permission checks in the file server for bypasses", "review", "strong"),
+        ("Give a second opinion on this schema migration", "review", "strong"),
+        ("Check this change for anything I missed", "review", "strong"),
+        ("Is this refactor safe to merge", "review", "strong"),
+        ("Write the patch that fixes the permission bypass", "coding", "strong"),
+        ("Add the missing test coverage this patch needs", "test", "standard"),
+    ]),
+    ("standard vs strong vs max", [
+        ("Add a log line when a resource is excluded", "coding", "standard"),
+        ("Return the chosen resource from the resolver", "coding", "standard"),
+        ("Sort the candidates by score before logging", "coding", "standard"),
+        ("Add a flag to disable isolation", "coding", "standard"),
+        ("Handle a provider that returns no models", "coding", "standard"),
+        ("Fix the off-by-one in the pagination cursor", "debug", "standard"),
+        ("Make the whole pool survive a provider outage without losing a turn", "coding", "max"),
+        ("Redesign the scoring so quota pressure dominates under scarcity", "coding", "max"),
+        ("Work out whether the two routing policies can be unified", "research", "strong"),
+        ("Explain the tradeoff between isolation and disk usage", "research", "standard"),
+        ("rename the variable foo to bar in utils.ts", "coding", "fast"),
+        ("Add a --json flag to the export command", "coding", "standard"),
+        ("Add unit tests for the retry helper", "test", "standard"),
+        ("Raise coverage on the payments module to 80 percent", "test", "standard"),
+        ("Write a fixture that builds a temporary git repository", "test", "standard"),
+        ("Implement pagination for the user list endpoint", "coding", "standard"),
+        ("Squash the last five commits into one", "git", "fast"),
+        ("Rebase this branch onto main and resolve the conflicts", "git", "standard"),
+        ("Cherry-pick the hotfix onto the release branch", "git", "standard"),
+        ("Refactor the entire authentication architecture to support multi-tenant sessions", "coding", "max"),
+        ("Design a plugin system for third-party providers", "coding", "max"),
+        ("Make the scheduler safe under concurrent writers", "coding", "max"),
+        ("Rework the routing policy so tiers are never over-provisioned", "coding", "max"),
+        ("Explain how the session drain promotes admitted prompts", "inspect", "fast"),
+        ("Document the failover state machine", "docs", "standard"),
+    ]),
+    ("long and noisy phrasing", [
+        ("it says model not found freecode something, what is that about", "debug", "strong"),
+        ("can you make auto pick the cheap model when quota is low", "coding", "standard"),
+        ("the scheduler keeps picking the broken account, why", "debug", "strong"),
+        ("just show me the routing decision from last time", "inspect", "fast"),
+        ("i dont understand why this task went to the expensive model", "research", "standard"),
+        ("please document how failover works", "docs", "standard"),
+        ("ok so basically the thing is broken when i click export on safari, can you look into it", "debug", "strong"),
+        ("we need the export command to also emit json, please add that", "coding", "standard"),
+        ("pls rename foo to bar", "coding", "fast"),
+        ("hmm the tests are failing again after the merge, not sure why", "debug", "strong"),
+        ("can you just tell me where the auth check lives", "inspect", "fast"),
+        ("i want to know if we can drop the lodash dependency", "research", "standard"),
+    ]),
 ]
+
+# Flat view used by the scoring code.
+CASES: List[Tuple[str, str, str]] = [case for _, group in BOUNDARIES for case in group]
+
+# Which boundary each case belongs to, for the per-group report.
+CASE_GROUP: dict = {case[0]: name for name, group in BOUNDARIES for case in group}
 
 
 def route_state(task: str) -> Dict[str, Any]:
@@ -176,6 +282,7 @@ def evaluate(classifier: Classifier, questions: Dict[str, Any], label: str) -> D
     tiers_exact = 0
     confidences: List[float] = []
     misses: List[str] = []
+    groups: Dict[str, List[int]] = {}
 
     for task, want_kind, min_tier in CASES:
         state = route_state(task)
@@ -191,10 +298,14 @@ def evaluate(classifier: Classifier, questions: Dict[str, Any], label: str) -> D
         else:
             decision = baseline
 
-        kinds_hit += decision["kind"] == want_kind
+        correct = decision["kind"] == want_kind
+        kinds_hit += correct
         tiers_adequate += tier_adequate(decision["tier"], min_tier)
         tiers_exact += decision["tier"] == min_tier
-        if decision["kind"] != want_kind:
+        group = groups.setdefault(CASE_GROUP.get(task, "ungrouped"), [0, 0])
+        group[0] += correct
+        group[1] += 1
+        if not correct:
             misses.append(
                 "%-34s want %-8s got %-8s (tier %s)" % (_clip(task), want_kind, decision["kind"], decision["tier"])
             )
@@ -205,6 +316,7 @@ def evaluate(classifier: Classifier, questions: Dict[str, Any], label: str) -> D
         "tier_adequate": tiers_adequate / len(CASES),
         "tier_exact": tiers_exact / len(CASES),
         "misses": misses,
+        "groups": {name: (hits / total if total else 0.0) for name, (hits, total) in groups.items()},
     }
     if confidences:
         row.update(
@@ -255,6 +367,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--variant", action="append", choices=sorted(VARIANTS), default=None)
     parser.add_argument("--show-misses", action="store_true")
     parser.add_argument("--coverage", action="store_true", help="report how often each question is trusted")
+    parser.add_argument("--groups", action="store_true", help="break accuracy down by boundary")
     args = parser.parse_args(argv)
 
     names = args.variant or ["rules-only", "current", "laya-style"]
@@ -280,6 +393,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "-" if low is None else "%.3f" % low,
             )
         )
+
+    if args.groups:
+        print("")
+        print("%-28s %s" % ("boundary", "  ".join(row["label"] for row in results)))
+        names = sorted({name for row in results for name in row["groups"]})
+        for name in names:
+            cells = []
+            for row in results:
+                value = row["groups"].get(name)
+                cells.append("     -" if value is None else "%5.0f%%" % (value * 100))
+            print("%-28s %s" % (name, "  ".join(cells)))
 
     if args.coverage:
         row = coverage()
