@@ -145,8 +145,31 @@ change to disk. The critical chain is complete:
 opencode runs → freecode binary → model:auto → TS ↔ Laya JSONL → tier → model
 ```
 
+## Regression check
+
+`bun test test/config test/provider` from `packages/opencode`:
+
+| State | Result |
+| --- | --- |
+| Frozen baseline (`e027eb5`, no FreeCode changes) | 939 pass, 3 skip, **5 fail** |
+| Current `freecode-main` | 939 pass, 3 skip, **5 fail** |
+
+Identical counts, so the five failures ship with the upstream snapshot and are not
+regressions:
+
+- creates global jsonc config with schema when no global configs exist
+- native project MCP servers override inherited V1 disabled state
+- jsonc overrides json in the same directory
+- project config can override MCP server enabled status
+- MCP config deep merges preserving base config properties
+
+Checking out the baseline commit directly does **not** work for this comparison:
+bun cannot resolve the workspace from that state and reports ~185 spurious
+failures. Stash the working tree, run the tests, then restore instead.
+
 ## Not started
 
 Resource scheduler with scoring, multi-account provider profiles, quota and health
 tracking, circuit breaking, failure classification with automatic fallback,
 worktree isolation for concurrent writers, packaging.
+
