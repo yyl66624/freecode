@@ -98,11 +98,16 @@ export async function resolve(input: ResolveInput): Promise<Resolution> {
   if (!decision) {
     // No router available. Honour the declared tier if there is one, otherwise
     // assume ordinary engineering work rather than guessing at either extreme.
+    //
+    // The bridge's own failure reason is included rather than a bare "unavailable":
+    // "Laya is not installed" and "Laya is installed but crashed" are different
+    // problems, and a user reading a log should not have to guess which they have.
     const tier = floor ?? "standard"
+    const why = LayaClient.instance().failure ?? "bridge did not answer"
     return {
       mode: requested ? "auto" : floor ? "tier" : "auto",
       tier,
-      reason: floor ? `router unavailable, declared tier ${tier}` : "router unavailable, default tier standard",
+      reason: `router unavailable (${why}), ${floor ? `declared tier ${tier}` : "default tier standard"}`,
     }
   }
 

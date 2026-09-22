@@ -60,7 +60,7 @@ const VERSION = 1
  * usually wants the most recent answer regardless of which project produced it.
  */
 export function file(): string {
-  return path.join(Global.Path.data, "freecode", "last-route.json")
+  return path.join(Global.Path.data, "last-route.json")
 }
 
 export function write(record: Omit<DecisionRecord, "version" | "at"> & { at?: number }): void {

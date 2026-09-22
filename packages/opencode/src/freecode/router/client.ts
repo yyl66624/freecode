@@ -2,6 +2,7 @@ export * as LayaClient from "./client"
 
 import path from "path"
 import { existsSync } from "fs"
+import { Global } from "@opencode-ai/core/global"
 import { fileURLToPath } from "url"
 
 /**
@@ -57,33 +58,69 @@ const SHUTDOWN_GRACE_MS = 2_000
 
 let nextId = 0
 
+const BRIDGE_SCRIPT = "main.py"
+
 /**
- * Locates the bridge interpreter.
+ * Candidate locations for the bridge, most specific first.
  *
- * `FREECODE_PYTHON` wins so a packaged install can point at its bundled
- * runtime. The workspace venv is checked next, then `python3` on PATH.
+ * Laya is an optional accelerator, not a dependency, so this deliberately
+ * searches a packaged install before the source checkout and returns an empty
+ * list rather than throwing when nothing is found. A FreeCode with no bridge
+ * routes on rules and says so; it does not refuse to start.
+ *
+ * Order:
+ *   1. `FREECODE_BRIDGE_DIR` — an explicit override, for tests and unusual installs
+ *   2. `<data>/bridge`         — where the installer puts the scripts
+ *   3. next to the executable  — a relocatable bundle
+ *   4. the source checkout     — development, and the only path that also
+ *                                provides the vendored Laya SDK
  */
-function resolvePython(repoRoot: string | undefined) {
-  const override = process.env["FREECODE_PYTHON"]
-  if (override) return override
-  if (repoRoot) {
-    const venv = path.join(repoRoot, ".runtime", "laya-venv", "bin", "python")
-    if (existsSync(venv)) return venv
+function bridgeDirectories(): string[] {
+  const candidates: string[] = []
+  const override = process.env["FREECODE_BRIDGE_DIR"]
+  if (override) candidates.push(override)
+
+  // `Global.Path.data` already ends in the application name.
+  candidates.push(path.join(Global.Path.data, "bridge"))
+
+  const executable = process.execPath
+  if (executable) candidates.push(path.join(path.dirname(executable), "bridge"))
+
+  // src/freecode/router/client.ts -> repository root is six levels up, and the
+  // bridge lives back down the tree under opencode-dev.
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const root = path.resolve(here, "..", "..", "..", "..", "..", "..")
+  candidates.push(path.join(root, "opencode-dev", "packages", "opencode", "src", "freecode", "router"))
+
+  return candidates
+}
+
+/** The first bridge directory that actually contains the script. */
+function resolveBridgeScript(): string | undefined {
+  for (const directory of bridgeDirectories()) {
+    const script = path.join(directory, BRIDGE_SCRIPT)
+    if (existsSync(script)) return script
   }
-  return "python3"
+  return undefined
 }
 
 /**
- * Repo root of the checkout this module runs from.
+ * Locates the bridge interpreter.
  *
- * The bridge script and the vendored Laya SDK both live in the repository, so a
- * running FreeCode always drives the revision it shipped with.
+ * `FREECODE_PYTHON` wins so an install can point at the virtualenv it built. A
+ * virtualenv beside the bridge directory is next, because that is where the
+ * installer puts one, then `python3` on PATH.
  */
-function resolveRepoRoot() {
-  if (process.env["FREECODE_ROOT"]) return process.env["FREECODE_ROOT"]
-  // src/freecode/router/client.ts -> repository root is six levels up.
-  const here = path.dirname(fileURLToPath(import.meta.url))
-  return path.resolve(here, "..", "..", "..", "..", "..", "..")
+function resolvePython(scriptDirectory: string | undefined) {
+  const override = process.env["FREECODE_PYTHON"]
+  if (override) return override
+  if (scriptDirectory) {
+    for (const relative of [path.join("..", "venv", "bin", "python"), path.join(".venv", "bin", "python")]) {
+      const candidate = path.resolve(scriptDirectory, relative)
+      if (existsSync(candidate)) return candidate
+    }
+  }
+  return "python3"
 }
 
 export class Bridge {
@@ -91,7 +128,7 @@ export class Bridge {
   private pending = new Map<string, Pending>()
   private failed: string | undefined
 
-  constructor(private readonly options: { repoRoot?: string } = {}) {}
+  constructor(private readonly options: { script?: string } = {}) {}
 
   /** Why the bridge is unusable, if it is. */
   get failure() {
@@ -105,14 +142,14 @@ export class Bridge {
   private start() {
     if (this.proc || this.failed) return
 
-    const root = this.options.repoRoot ?? resolveRepoRoot()
-    const script = path.join(root, "opencode-dev", "packages", "opencode", "src", "freecode", "router", "main.py")
-    const interpreter = resolvePython(root)
-
-    if (!existsSync(script)) {
-      this.failed = `bridge script not found at ${script}`
+    const script = this.options.script ?? resolveBridgeScript()
+    if (!script) {
+      // Not an error: the bridge is optional. Routing degrades to rules, and the
+      // caller records `failed` so `/routes status` can say why Laya is absent.
+      this.failed = `Laya bridge not found (searched ${bridgeDirectories().length} locations)`
       return
     }
+    const interpreter = resolvePython(path.dirname(script))
 
     try {
       const proc = Bun.spawn({
@@ -122,7 +159,11 @@ export class Bridge {
         stderr: "pipe",
         env: {
           ...process.env,
-          FREECODE_LAYA_CACHE: process.env["FREECODE_LAYA_CACHE"] ?? path.join(root, ".runtime", "hf-cache"),
+          // Checkpoints default into the data directory, so an installed FreeCode
+          // keeps its model cache where its state already lives instead of
+          // writing into whatever directory the user happened to run it from.
+          FREECODE_LAYA_CACHE:
+            process.env["FREECODE_LAYA_CACHE"] ?? path.join(Global.Path.data, "laya-cache"),
           FREECODE_LAYA_DEVICE: process.env["FREECODE_LAYA_DEVICE"] ?? "mps",
         },
       })

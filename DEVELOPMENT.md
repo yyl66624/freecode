@@ -305,10 +305,151 @@ Checking out the baseline commit directly does **not** work for this comparison:
 bun cannot resolve the workspace from that state and reports ~185 spurious
 failures. Stash the working tree, run the tests, then restore instead.
 
+## Runtime failover and the circuit breaker
+
+A provider failure retries the same task on a different account. This is the
+mechanism behind FreeCode's promise not to waste Head agent tokens: a rate limit,
+a timeout, a 5xx or an expired key does not mean the task was too hard, and
+escalating on one costs a frontier turn while teaching the Head agent nothing.
+
+```
+failure -> classify -> resource failure? -> exclude -> pick next eligible -> retry same task
+                    \-> task failure?  -> escalate (the only path that does)
+```
+
+`failure.ts` classifies into `rate_limit`, `quota`, `authentication`, `timeout`,
+`server`, `context_limit`, `model_unavailable`, `task_failure` and `unknown`. Only
+the last two escalate. Task-shaped wording beats provider-shaped wording, so a
+tool error that happens to mention a timeout stays a task failure rather than
+burning another account's quota. Reset deadlines are parsed out of provider text,
+because an exact deadline beats a guessed cooldown.
+
+The breaker is a real one:
+
+- `closed` counts failures; `open` excludes the resource; `half_open` allows
+  exactly one probe once the cooldown expires, promoted on read so a process that
+  was not running when the cooldown ended still decides correctly.
+- A rate limit opens the circuit **immediately** rather than counting to a
+  threshold: the provider already told us to stop.
+- A failed probe backs off by a multiplier up to a 30-minute cap, so a broken
+  account cannot consume a probe on every request.
+- Latency and success are exponential moving averages, because a resource that
+  was slow an hour ago and is fast now should score as fast.
+- Version 1 state files migrate rather than being discarded: losing a known rate
+  limit on upgrade is exactly the failure the store exists to prevent.
+
+Failover is bounded at three attempts. A pool of ten rate-limited accounts will
+not be fixed by ten requests while the user waits, and three finds a healthy
+account in every realistic case.
+
+### What end-to-end failover verification does and does not cover
+
+Verified by test, driving `plan` directly (`test/freecode/fallback.test.ts`):
+switching on a rate limit, excluding before choosing so a task is never handed
+back to the account that just refused it, not escalating provider failures,
+escalating task failures, stopping at the attempt budget, skipping an alternative
+that is itself cooling down, using a third account when the second is, and reading
+the verdict the stream already recorded instead of counting a failure twice.
+
+**Not** verified against a real rate-limited provider: provoking a genuine 429
+that then fails over through the full session path needs a provider that will
+rate limit on demand. The unit tests cover the decision; the wiring around it is
+covered only by inspection and by the healthy path still working.
+
+## Auditable decisions
+
+A log line answered "which model" but not "why not the other one". Every decision
+is now written in full to `last-route.json`: the router's classification and
+reasoning, the tier it asked for, every candidate with its eligibility, score and
+score components, and — for candidates that were refused rather than merely
+beaten — the reason.
+
+```
+$ freecode routes why
+Selected  deepseek/deepseek-v4-pro
+
+  + capability   0.70
+  + quota        0.50
+  + health       1.00
+  + latency      0.93
+  + reliability  1.00
+  + cost         0.83
+  = score        0.769
+
+Not selected
+  broken/deepseek-chat        score 0.570 (lower than the winner)
+  deepseek/deepseek-flash     not eligible for this tier
+```
+
+A hard exclusion is recorded as ineligible with **no score**, never as a low
+score, so the report cannot make a rate-limited account look like a merely worse
+one. `freecode routes status` shows the pool — account, tiers, cost, circuit
+state, attempts, provider failures, latency — plus what is currently excluded and
+why, plus the choice the scheduler would make for every tier right now.
+
+## Packaging
+
+```
+bun run package          # from packages/opencode
+./install.sh             # places the binary, bridge scripts and a starter config
+```
+
+`package.ts` builds one binary for the current platform, names it `freecode`, and
+smoke tests it twice: that it runs, and that its help output names FreeCode. A
+binary that builds but cannot start is the failure mode that reaches a user.
+
+`install.sh` respects the XDG layout so the installer and the binary agree on
+where state lives — `$XDG_DATA_HOME/freecode` for `resources.json`,
+`last-route.json`, the bridge and the model cache, `$XDG_CONFIG_HOME/freecode`
+for configuration. It never writes outside the prefix and the data directory.
+
+**Laya is optional, and the install proves it.** `FREECODE_SKIP_LAYA=1` installs
+the binary and bridge scripts with no Python at all, and if preparing the Python
+runtime fails for any reason the install still succeeds. Verified: with no
+reachable bridge the router reports
+`router unavailable (Laya bridge not found (searched 3 locations))` and the
+scheduler still selects a model from the declared tier, and the task completes.
+A coding agent that refuses to start over a missing optional model is not a
+usable agent.
+
+### The path-doubling trap, three times over
+
+`Global.Path.data` already ends in the application name, so appending `freecode`
+again produced `<data>/freecode/freecode/...`. This silently scattered state into
+a doubled directory and made the bridge unfindable in an installed layout. It was
+fixed in `client.ts`, `state.ts` and `decision.ts`, and `install.sh` had the same
+class of mistake in `FREECODE_DATA` before the data path was derived from the XDG
+convention instead. When a FreeCode state file or the bridge goes missing, check
+for a doubled application name first.
+
+## Regression check
+
+`bun test test/config test/provider test/freecode` from `packages/opencode`:
+
+| State | Result |
+| --- | --- |
+| Frozen baseline (`e027eb5`, no FreeCode changes) | 939 pass, 3 skip, **5 fail** |
+| Current `freecode-main` | 1009 pass, 3 skip, **5 fail** |
+
+The five failures are identical on both, so they ship with the upstream snapshot
+and are not regressions:
+
+- creates global jsonc config with schema when no global configs exist
+- native project MCP servers override inherited V1 disabled state
+- jsonc overrides json in the same directory
+- project config can override MCP server enabled status
+- MCP config deep merges preserving base config properties
+
+Checking out the baseline commit directly does **not** work for this comparison:
+bun cannot resolve the workspace from that state and reports ~185 spurious
+failures. Stash the working tree, run the tests, then restore instead.
+
 ## Not started
 
-Automatic runtime failover (a provider failure switching accounts mid-turn without
-spending the Head agent's tokens), worktree isolation for concurrent writers,
-packaging and an installer.
+Worktree isolation for concurrent writers (v0.3), Laya fine-tuning on the routing
+data FreeCode now produces (v0.4), and a wider routing benchmark — 100-200 cases
+weighted toward the boundaries the rules get wrong, rather than uniformly
+sampling cases both rule and model find easy.
+
 
 

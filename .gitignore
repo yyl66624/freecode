@@ -36,3 +36,6 @@ tsconfig.tsbuildinfo
 # FreeCode: Python bridge bytecode
 __pycache__/
 *.py[cod]
+
+# FreeCode: build output
+dist/

@@ -113,7 +113,7 @@ export function empty(): ResourceState {
  * uses it.
  */
 export function file(): string {
-  return path.join(Global.Path.data, "freecode", "resources.json")
+  return path.join(Global.Path.data, "resources.json")
 }
 
 export function load(): Snapshot {
