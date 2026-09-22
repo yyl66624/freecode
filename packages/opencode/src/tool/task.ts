@@ -17,6 +17,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { InstanceState } from "@/effect/instance-state"
 import { InstanceRef } from "@/effect/instance-ref"
 import { Isolation as FreeCodeIsolation } from "@/freecode/isolation"
+import { FreeCodeContext } from "@/freecode/context"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -230,16 +231,30 @@ export const TaskTool = Tool.define(
           parts,
         })
 
-        const result = yield* (isolated
-          ? Effect.provideService(prompt, InstanceRef, {
-              ...instance,
-              directory: isolated.directory,
-              // The worktree is the project for this subagent: reporting the
-              // original worktree would make `external_directory` permissions
-              // treat its own files as outside the project.
-              worktree: isolated.directory,
-            })
-          : prompt)
+        // FreeCode seam. The routing context is published here rather than relying
+        // on it surviving from the parent turn: the subagent builds its model
+        // request in this effect, and a context published further out did not
+        // reach it. This is also the more correct place — the agent and the task
+        // text are both known exactly here.
+        const withRouting = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          Effect.provideService(effect, FreeCodeContext.RoutingRef, {
+            agent: next.name,
+            task: params.prompt,
+            tier: next.tier,
+          })
+
+        const result = yield* withRouting(
+          isolated
+            ? Effect.provideService(prompt, InstanceRef, {
+                ...instance,
+                directory: isolated.directory,
+                // The worktree is the project for this subagent: reporting the
+                // original worktree would make `external_directory` permissions
+                // treat its own files as outside the project.
+                worktree: isolated.directory,
+              })
+            : prompt,
+        )
         if (result.info.role === "assistant" && result.info.error) {
           const message =
             "message" in result.info.error.data && typeof result.info.error.data.message === "string"

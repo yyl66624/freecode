@@ -319,6 +319,42 @@ fighting it.
    which silently inverted the preference and made the priciest candidate win.
    Two metrics in one benchmark hid the same class of mistake earlier.
 
+## The silent-routing failure
+
+The most expensive bug in this project, because it failed silently.
+
+A missing routing context does not throw. `Provider.getModel` sees the sentinel,
+finds nothing to classify, and resolves the instance default — which, in a
+single-provider setup, is the same model routing would have chosen. Every log line
+looks healthy, the task succeeds, and routing is dead.
+
+It was found by grepping for `freecode route` in a run that should have produced
+it and finding zero matches. Isolating it took an experiment rather than
+inspection: with `model: auto` on the **main** agent, routing ran; with `auto` only
+on a **subagent**, it did not. The subagent's model request carried
+`providerID="freecode", modelID=""` and no context at all.
+
+The fix is in the right place regardless of why the context failed to propagate:
+the Task tool publishes the routing context itself, around the subagent's prompt.
+It is the more correct location anyway — the agent name and the task text are both
+known exactly there, rather than being inferred from parts several frames away.
+
+Two lessons recorded as tests in `test/freecode/context.test.ts`:
+
+1. **An absent context is an explicit outcome, not a silent default.** The tests
+   pin that `RoutingRef` is undefined by default, that a provided context is
+   readable several frames deep, and that an inner provision overrides an outer
+   one — which is what lets a subagent route on its own task rather than its
+   parent's.
+2. **A previous revision of that file asserted nothing useful.** It checked
+   `expect(RoutingRef).toBeInstanceOf(Context.Reference)`, which fails against
+   Effect's actual constructor and would have kept failing while proving nothing
+   about behaviour. It was replaced with the behavioural check above.
+
+An earlier revision of the same test also spawned the real Laya bridge and paid a
+25-second model load to learn something already decided by `higherTier`. Both are
+the same mistake: testing the implementation instead of the contract.
+
 ### Resolution must happen inside the routing Effect
 
 `Effect.runPromise` starts a fresh runtime with no instance context, so a pool
@@ -471,7 +507,7 @@ for a doubled application name first.
 | State | Result |
 | --- | --- |
 | Frozen baseline (`e027eb5`, no FreeCode changes) | 939 pass, 3 skip, **5 fail** |
-| Current `freecode-main` | 1033 pass, 3 skip, **5 fail** |
+| Current `freecode-main` | 1044 pass, 3 skip, **5 fail** |
 
 The five failures are identical on both, so they ship with the upstream snapshot
 and are not regressions:
