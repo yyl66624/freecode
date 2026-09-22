@@ -122,3 +122,60 @@ def clamp_state(state: Dict[str, Any], limit: int) -> Dict[str, Any]:
     budget = max(0, limit - overhead)
     trimmed["task"] = task[:budget].rstrip()
     return trimmed
+
+def domain_question() -> Dict[str, Dict[str, Any]]:
+    """Laya's own `domain` preset, used verbatim.
+
+    This is the only question in the routing pass whose confidence is
+    calibrated, because the checkpoint was trained on exactly this id, wording
+    and option set. Its answer is coarse — it does not distinguish debugging from
+    testing — but it is the one signal that can contradict a route: work the
+    model confidently places outside software engineering should not be sent
+    through the coding pipeline.
+
+    The wording is copied from the SDK's shipped `router_questions()` preset, and
+    must stay that way. Rewording it is what destroys the calibration.
+    """
+    return {
+        "domain": {
+            "type": "choice",
+            "instructions": "What domain does `request` belong to?",
+            "criteria": {
+                "code": "software engineering, programming, refactoring, architecture, debugging",
+                "math_or_logic": "mathematics, logic puzzles, proofs, complex calculation",
+                "writing": "creative writing, essays, emails, blog posts, copywriting",
+                "factual_lookup": "facts, definitions, trivia, history",
+                "data_analysis": "statistics, SQL, data manipulation, metrics",
+                "chitchat": "casual conversation, greetings, small talk",
+            },
+        }
+    }
+
+
+def difficulty_question() -> Dict[str, Dict[str, Any]]:
+    """Laya's own `difficulty` preset, used verbatim.
+
+    Calibrated in the sense that matters for routing: its score separates the
+    benchmark's easy band (mean required tier 1.38) from its hard band (2.62),
+    monotone but with overlap. Its *confidence* is not usable — 0.06-0.14 — so
+    the score is treated as a ranking signal with a threshold, never as a
+    calibrated probability.
+
+    Measured over 27 labelled tasks: correlation with required tier r=0.589,
+    score range 1.41-2.10.
+
+    The wording is copied from the SDK's shipped `router_questions()` preset and
+    must stay that way; rewording is what destroys calibration.
+    """
+    return {
+        "difficulty": {
+            "type": "score",
+            "instructions": "How hard is `request` for a language model?",
+            "criteria": [
+                "trivial: a lookup or one-liner",
+                "easy: short answer, no reasoning",
+                "moderate: several steps",
+                "hard: long multi-step reasoning or specialist knowledge",
+            ],
+        }
+    }

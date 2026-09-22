@@ -145,6 +145,76 @@ change to disk. The critical chain is complete:
 opencode runs → freecode binary → model:auto → TS ↔ Laya JSONL → tier → model
 ```
 
+## Routing quality: measured, and mostly negative
+
+`packages/opencode/src/freecode/router/routing_bench.py` scores 27 hand-labelled
+software-engineering tasks. `rules-only` is the deterministic rules with no model
+at all, and is the floor any Laya variant has to beat.
+
+```
+variant          kind  tier>=min  tier=exact  conf-med  conf-min
+rules-only        85%        85%         78%         -         -
+current           85%        85%         74%     0.041     0.015
+laya-style        85%        85%         74%     0.038     0.022
+
+answered above the 0.35 trust threshold: kind 0%, tier 0%
+```
+
+Read together with the coverage line, this says: **Laya currently contributes no
+net value to fine-grained routing, and its confidence never clears the bar to be
+believed.** Accuracy is identical with and without it, exact-tier agreement is
+four points *worse* with it, and no answer is ever trusted.
+
+### What was tried, and what each attempt measured
+
+| Attempt | Result |
+| --- | --- |
+| Question set in FreeCode's own vocabulary | min confidence 0.019–0.29 |
+| Rewrite using Laya's phrasing: `request` placeholder, question form, described options | min confidence 0.022–0.29 |
+| Project `kind` onto the native `domain` vocabulary | confidence 0.27–0.68, but every case answered `code` |
+| One coarse binary `noul` question ("does this change files?") | read-only 0.21–0.29, file-changing 0.33–0.42 — all on the same side of 0.5 |
+| Sharpening temperature to 0.3 | confidence up, argmax unchanged |
+
+The temperature experiment is the informative one: it proves the low confidence is
+**not** a temperature artifact. The checkpoint's raw logits for FreeCode's question
+set are genuinely flat. Laya conditions on a learned embedding of the *question
+id*, so a question it was never trained on carries an uncalibrated head even when
+the sentence is plain English. This is structural and cannot be prompted away.
+
+Laya's answers on the ambiguous cases are usually *right* — it resolved three of
+the four the rules get wrong — but it reports ~0.03 confidence while doing so, and
+acting on uncalibrated answers at that confidence is how a router becomes
+unpredictable.
+
+### What was kept, and why
+
+1. **Rules own the decision.** `tier=exact` 74% versus 78% is the price; it buys a
+   routing layer that cannot silently misroute.
+2. **The native `domain` question as a contradiction check.** It is calibrated
+   (0.23–0.68), and a confident non-`code` answer escalates the tier and forces
+   review. It correctly flags "write a haiku" as `writing` at 0.52, and correctly
+   leaves factual lookups (0.16) and data analysis (0.30) below the threshold.
+3. **The native `difficulty` score as a gated escalation.** Correlation with
+   required tier r=0.589 over 27 tasks (low band mean 1.38, high band 2.62),
+   monotone with overlap. It escalates one tier above 1.85 and nothing else.
+4. **No blanket escalation.** Bumping every unfamiliar task was measured and
+   **removed**: it lifted `tier>=min` from 85% to 93% while dropping `tier=exact`
+   from 78% to 33%. The entire apparent gain was one step of systematic
+   over-provisioning bought with no signal. This is why the benchmark reports both
+   tier metrics — the safety metric alone made pure overspend look like progress.
+
+### The honest conclusion, and the real fix
+
+FreeCode's interesting layer is the *scheduler*, not the classifier. Resource
+selection, account pools, quota and health are deterministic problems with real
+data behind them; task classification into eight software-engineering classes is
+not something this checkpoint can do at a trustworthy confidence.
+
+If Laya is to earn its place in routing, the next step is **fine-tuning on
+software-engineering traces**, not more prompt engineering. The measurement
+harness is in place, so that work can be judged by numbers instead of impressions.
+Until then, keep the tier a conservative floor and let the rules lead.
+
 ## Regression check
 
 `bun test test/config test/provider` from `packages/opencode`:

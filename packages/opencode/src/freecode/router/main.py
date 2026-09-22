@@ -42,39 +42,12 @@ from typing import Any, Dict, Optional
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def _install_sdk_path() -> Optional[str]:
-    """Put the vendored Laya package on sys.path, if it is not already there.
+try:
+    import sdk as _sdk
+except ImportError:  # imported as part of the package
+    from . import sdk as _sdk
 
-    The SDK is not imported from site-packages because FreeCode must run the
-    Laya revision that ships with the repository. The directory is found by
-    walking up from this file, which keeps the bridge working regardless of how
-    deep the workspace nests the fork.
-    """
-    explicit = os.environ.get("FREECODE_LAYA_SDK")
-    if explicit:
-        return explicit if _add(explicit) else None
-
-    candidate = _HERE
-    for _ in range(10):
-        candidate = os.path.dirname(candidate)
-        if not candidate or candidate == os.sep:
-            break
-        found = os.path.join(candidate, "laya-main")
-        if os.path.isdir(os.path.join(found, "laya")):
-            _add(found)
-            return found
-    return None
-
-
-def _add(directory: str) -> bool:
-    if not os.path.isdir(os.path.join(directory, "laya")):
-        return False
-    if directory not in sys.path:
-        sys.path.insert(0, directory)
-    return True
-
-
-_SDK_DIR = _install_sdk_path()
+_SDK_DIR = _sdk.install()
 
 # Must run before `route` (and therefore `laya`) is imported, because
 # huggingface_hub freezes its cache location at import time.

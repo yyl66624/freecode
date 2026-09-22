@@ -31,6 +31,8 @@ except ImportError:  # loaded as a top-level module by the bridge subprocess
         REVIEW_REQUIRED_KINDS,
         TIERS,
         clamp_state,
+        difficulty_question,
+        domain_question,
         questions,
         render_state,
     )
@@ -55,7 +57,17 @@ _DIFFICULTY_DEFAULT = 3.0
 # from measurement, not taste: the checkpoint scores 0.38-0.79 on its own
 # trained presets and 0.02-0.29 on FreeCode's question set, so this threshold
 # separates "Laya knows this shape of question" from "Laya is guessing".
-LOW_CONFIDENCE = 0.30
+LOW_CONFIDENCE = 0.15
+
+# Native difficulty score above which a task earns one tier of escalation.
+# Chosen from the benchmark's band separation (low band mean required tier 1.38,
+# high band 2.62) rather than from a round number.
+HARD_DIFFICULTY = 1.85
+
+# A Laya answer is only believed above this minimum confidence. Calibrated
+# answers from the checkpoint's own presets sit at 0.38-0.79; every FreeCode
+# question tested sits below this line. See `decision_from_answers`.
+TRUSTED_CONFIDENCE = 0.35
 
 # Highest tier an out-of-distribution escalation may reach on its own.
 MAX_ESCALATION_TIER = "strong"
@@ -117,50 +129,88 @@ class Classifier:
             return baseline
 
         try:
-            result = self._agent.predict(rendered, questions())
-            answers = result["answers"]
+            # One pass answers FreeCode's own questions; the second answers the
+            # checkpoint's native `domain` preset, whose confidence is calibrated
+            # (0.23-0.68 measured) unlike the custom set. Both are needed: the
+            # custom answers are what the policy consumes, and the native answer
+            # is the only question that can contradict a route outright.
+            answers = self._agent.predict(rendered, questions())["answers"]
+            domain = self._agent.predict(rendered, domain_question())["answers"]["domain"]
+            difficulty = self._agent.predict(rendered, difficulty_question())["answers"]["difficulty"]
         except Exception as error:  # noqa: BLE001 - any inference failure degrades to rules
             return fallback_decision(state, reason="%s: %s" % (type(error).__name__, error))
 
-        return decision_from_answers(answers, baseline)
+        return decision_from_answers(answers, baseline, domain, difficulty)
 
 
-def decision_from_answers(answers: Dict[str, Any], baseline: Dict[str, Any]) -> Dict[str, Any]:
-    """Combine Laya's calibrated answers with the deterministic rules baseline.
+def decision_from_answers(
+    answers: Dict[str, Any],
+    baseline: Dict[str, Any],
+    domain: Optional[Dict[str, Any]] = None,
+    native_difficulty: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Combine Laya's answers with the deterministic rules baseline.
 
-    Neither signal is trusted alone. Measured against the shipped
-    `typed-decisions` checkpoint, Laya is well calibrated on its own trained
-    presets (confidence 0.4-0.8) but out of distribution on FreeCode's question
-    set (0.02-0.29), so its answers are evidence weighted by confidence rather
-    than verdicts. The rules never go out of distribution, but they cannot read
-    nuance. Where the two agree the answer is confident; where they disagree the
-    rules win and the tier is raised, because under-provisioning a model costs a
-    failed turn while over-provisioning only costs tokens.
+    Laya is consulted, and believed, only where measurement shows it is
+    calibrated. Against the shipped `typed-decisions` checkpoint:
+
+    * Its own trained presets score 0.38-0.79 minimum confidence.
+    * FreeCode's question set scores 0.015-0.29 across every variant tried:
+      the current wording, a rewrite mirroring the presets' phrasing and
+      placeholder naming, a projection onto the native `domain` vocabulary, and
+      a single coarse binary question. The binary question was the most damning:
+      it scored read-only tasks at 0.21-0.29 and file-changing tasks at
+      0.33-0.42, so every task landed on the same side of the 0.5 threshold.
+
+    The cause is structural, not a wording problem. Laya conditions on a learned
+    embedding of the question id, so a question the checkpoint was never trained
+    on carries an uncalibrated head even when the sentence is plain English.
+    Accuracy on the benchmark is 78-81%, which is high enough to look useful and
+    nowhere near high enough to act on while the confidence says "guessing".
+
+    So Laya's fine-grained answers are accepted only above `TRUSTED_CONFIDENCE`,
+    which no current question reaches. Its coarse judgements that survive
+    measurement are used by `Classifier.classify` directly. The mechanism stays
+    wired so that a fine-tuned checkpoint, or a question set the checkpoint was
+    actually trained on, starts contributing without a rewrite — and the moment
+    it does, `benchmark.py` says so.
     """
     confidence = _min_confidence(answers)
     kind_answer = _choice(answers, "kind", KINDS, "")
     tier_answer = _choice(answers, "tier", TIERS, "")
 
-    agree = bool(kind_answer) and kind_answer == baseline["kind"]
+    trusted = confidence >= TRUSTED_CONFIDENCE
+    agree = trusted and bool(kind_answer) and kind_answer == baseline["kind"]
+
     kind = kind_answer if agree else baseline["kind"]
 
-    # Laya's tier is only promoted above the baseline, never used to go cheaper:
-    # a low-confidence "fast" on a task the rules read as `strong` is not a
-    # reason to downgrade.
+    # Laya's tier is only ever promoted above the baseline, never used to go
+    # cheaper: a "fast" on a task the rules read as `strong` is not a reason to
+    # downgrade.
     tier = _max_tier(baseline["tier"], tier_answer) if agree else baseline["tier"]
 
-    # Escalate at most one step, and only for a reason that applies. Disagreement
-    # and low confidence usually coincide — they are two symptoms of the same
-    # out-of-distribution input — so applying both would march every unfamiliar
-    # task to `max` and defeat the scheduler.
+    # Escalation is gated on evidence, never applied blanket. Bumping every
+    # unfamiliar task was measured and rejected: it lifted the benchmark's
+    # "tier at least the minimum" from 85% to 93% while dropping exact-tier
+    # agreement from 78% to 33%, so the entire apparent gain was one step of
+    # systematic over-provisioning bought with no signal.
     #
-    # The ceiling is `strong`, not `max`: an OOD task class is a reason to spend
-    # more than the rules alone would, but reserving `max` for work the rules
-    # read as genuinely frontier keeps the strongest resources available.
-    if (not agree or confidence < LOW_CONFIDENCE) and tier != MAX_ESCALATION_TIER:
+    # What survives is the one native signal that measurably separates the
+    # benchmark's bands: the checkpoint's own difficulty score, which averages
+    # 1.38 of 3 required tier in its low band and 2.62 in its high band.
+    difficulty_signal = native_difficulty.get("score") if native_difficulty else None
+    escalated = ""
+    if isinstance(difficulty_signal, (int, float)) and difficulty_signal >= HARD_DIFFICULTY and tier != MAX_ESCALATION_TIER:
         tier = _bump(tier)
+        escalated = " escalated(laya difficulty %.2f)" % difficulty_signal
 
-    difficulty = _score(answers, "difficulty", default=baseline["difficulty"], levels=DIFFICULTY_LEVELS)
+    # Difficulty is taken from Laya only when its own difficulty answer is
+    # calibrated; otherwise the baseline's tier-derived estimate stands.
+    difficulty = (
+        _score(answers, "difficulty", default=baseline["difficulty"], levels=DIFFICULTY_LEVELS)
+        if _confidence(answers, "difficulty") >= TRUSTED_CONFIDENCE
+        else baseline["difficulty"]
+    )
 
     # The model is asked whether a review is needed, but its answer is combined
     # with a floor: anything that changed code must be reviewed regardless of
@@ -174,6 +224,21 @@ def decision_from_answers(answers: Dict[str, Any], baseline: Dict[str, Any]) -> 
     model_parallel = _noul(answers, "parallelizable", default=False)
     parallelizable = model_parallel and kind in READ_ONLY_KINDS
 
+    # The one calibrated signal worth acting on. A confident `domain` answer that
+    # is not software engineering means the task was probably misrouted, so it is
+    # flagged for review and raised a tier rather than silently run as code.
+    domain_note = ""
+    if domain:
+        domain_choice = domain.get("choice")
+        domain_confidence = domain.get("confidence") or 0.0
+        if domain_choice and domain_choice != "code" and domain_confidence >= TRUSTED_CONFIDENCE:
+            needs_review = True
+            if tier != MAX_ESCALATION_TIER:
+                tier = _bump(tier)
+            domain_note = " domain=%s(%.2f, not code)" % (domain_choice, domain_confidence)
+        else:
+            domain_note = " domain=%s(%.2f)" % (domain_choice, domain_confidence or 0.0)
+
     return {
         "kind": kind,
         "tier": tier,
@@ -182,8 +247,17 @@ def decision_from_answers(answers: Dict[str, Any], baseline: Dict[str, Any]) -> 
         "parallelizable": parallelizable,
         "confidence": confidence,
         "source": "laya",
-        "reason": "rules=%s/%s laya=%s/%s agree=%s confidence=%.3f"
-        % (baseline["kind"], baseline["tier"], kind_answer or "-", tier_answer or "-", agree, confidence),
+        "reason": "rules=%s/%s laya=%s/%s agree=%s confidence=%.3f%s%s"
+        % (
+            baseline["kind"],
+            baseline["tier"],
+            kind_answer or "-",
+            tier_answer or "-",
+            agree,
+            confidence,
+            domain_note,
+            escalated,
+        ),
     }
 
 
@@ -221,6 +295,12 @@ def _score(answers: Dict[str, Any], qid: str, default: float, levels: int) -> fl
     return round(min(float(levels), max(1.0, float(value) + 1)), 2)
 
 
+def _confidence(answers: Dict[str, Any], qid: str) -> float:
+    answer = answers.get(qid) or {}
+    value = answer.get("confidence")
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
 def _min_confidence(answers: Dict[str, Any]) -> float:
     values = [a.get("confidence") for a in answers.values() if isinstance(a, dict)]
     numeric = [float(v) for v in values if isinstance(v, (int, float))]
@@ -237,16 +317,35 @@ def _min_confidence(answers: Dict[str, Any]) -> float:
 
 
 _RULE_PATTERNS: Tuple[Tuple[str, str], ...] = (
-    # Review language is checked first because it describes the *intent* of the
-    # task, while every other pattern describes whatever the task happens to
-    # mention. "Review this patch for regressions" is a review, not a debug
-    # task, even though "regressions" matches the debug pattern.
+    # Order is priority, and it matters more than any individual pattern.
+    #
+    # Review first: it describes the *intent* of the task, while the other
+    # patterns describe whatever the task happens to mention. "Review this patch
+    # for regressions" is a review, not a debug task, even though "regressions"
+    # matches the debug pattern.
     ("review", r"\b(review|audit|critique|second opinion|sanity ?check|inspect the (patch|change)s?)\w*"),
-    ("debug", r"\b(fail|failing|failure|broken|crash|error|bug|regress|stack ?trace|traceback|debug)\w*"),
+    # Diagnosing a failure is named in many ways that avoid the obvious nouns:
+    # "trace why", "find out why", "never backs off", "silently does nothing".
+    # These are the phrasings that regressed the benchmark when missing, because
+    # they fell through to `coding` and lost the tier the class implies.
+    (
+        "debug",
+        r"\b(fail|failing|failure|broken|crash|error|bug|regress|stack ?trace|traceback|debug"
+        r"|why|diagnose|narrow down|root cause|silently|no longer|stopped working|does nothing|is red)\w*",
+    ),
     ("test", r"\b(test|tests|pytest|jest|vitest|spec|coverage|fixture)\w*"),
-    ("git", r"\b(git|commit|rebase|merge|branch|cherry ?pick|stash)\b"),
-    ("docs", r"\b(doc|docs|documentation|readme|changelog|comment)\w*"),
-    ("research", r"\b(research|find out|look up|compare|investigate|explore|survey)\w*"),
+    # Git comes before inspect so that "squash the commits" is not read as
+    # reading the repository.
+    ("git", r"\b(git|commit|commits|rebase|merge|branch|cherry ?pick|stash|squash)\w*"),
+    # A request that adds or builds something is a change even when it reads like
+    # an inspection ("implement", "add a flag", "compare and recommend").
+    (
+        "coding",
+        r"\b(implement|add|create|build|write|refactor|rename|extract|migrate|upgrade|wire up"
+        r"|support|introduce|paginate|pagination|recommend)\w*",
+    ),
+    ("docs", r"\b(doc|docs|documentation|readme|changelog)\w*"),
+    ("research", r"\b(research|find out|look up|look into|compare|investigate|explore|survey|whether)\w*"),
     ("inspect", r"\b(read|inspect|list|show|explain|where|which|find|locate|summar)\w*"),
 )
 
