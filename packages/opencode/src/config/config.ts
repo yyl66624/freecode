@@ -14,6 +14,7 @@ import { applyEdits, modify } from "jsonc-parser"
 import { InstallationLocal, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { existsSync } from "fs"
 import { Account } from "@/account/account"
+import { FreeCode } from "@/freecode/freecode"
 import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@opencode-ai/core/v1/config/console-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -137,8 +138,21 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Co
 
 export const use = serviceUse(Service)
 
+/**
+ * A config directory is one FreeCode reads `freecode.*`/`opencode.*` files from:
+ * any `.freecode`/`.opencode` directory, the global config root, or an explicit
+ * `OPENCODE_CONFIG_DIR` override.
+ */
+function isConfigDirectory(dir: string) {
+  return (
+    FreeCode.projectConfigDirs.some((name) => dir.endsWith(`/${name}`) || dir === name) ||
+    dir === Global.Path.config ||
+    dir === Flag.OPENCODE_CONFIG_DIR
+  )
+}
+
 function globalConfigFile() {
-  const candidates = ["opencode.jsonc", "opencode.json", "config.json"].map((file) =>
+  const candidates = ["freecode.jsonc", "freecode.json", "opencode.jsonc", "opencode.json", "config.json"].map((file) =>
     path.join(Global.Path.config, file),
   )
   for (const file of candidates) {
@@ -270,8 +284,12 @@ const layer = Layer.effect(
         }
       }
       result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "config.json"), env))
+      // FreeCode's own global file wins over an inherited OpenCode one, so a
+      // user can migrate by adding settings rather than rewriting in place.
       result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "opencode.json"), env))
       result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "opencode.jsonc"), env))
+      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "freecode.json"), env))
+      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "freecode.jsonc"), env))
 
       const legacy = path.join(Global.Path.config, "config")
       if (existsSync(legacy)) {
@@ -311,17 +329,15 @@ const layer = Layer.effect(
       const gitignore = path.join(dir, ".gitignore")
       const hasIgnore = yield* fs.existsSafe(gitignore)
       if (!hasIgnore) {
+        // Best effort by design: this only keeps a config directory tidy, and a
+        // directory we can read but not write (root-owned, read-only mount, or
+        // an uninterruptible platform error) must not abort startup.
         yield* fs
           .writeFileString(
             gitignore,
             ["node_modules", "package.json", "package-lock.json", "bun.lock", ".gitignore"].join("\n"),
           )
-          .pipe(
-            Effect.catchIf(
-              (e) => e.reason._tag === "PermissionDenied",
-              () => Effect.void,
-            ),
-          )
+          .pipe(Effect.catchCause(() => Effect.void))
       }
     })
 
@@ -418,7 +434,7 @@ const layer = Layer.effect(
         }
 
         if (!Flag.OPENCODE_DISABLE_PROJECT_CONFIG) {
-          for (const file of yield* ConfigPaths.files("opencode", ctx.directory, ctx.worktree).pipe(Effect.orDie)) {
+          for (const file of yield* ConfigPaths.projectFiles(ctx.directory, ctx.worktree).pipe(Effect.orDie)) {
             yield* merge(file, yield* loadFile(file, authEnv), "local")
           }
         }
@@ -436,14 +452,17 @@ const layer = Layer.effect(
         const deps: Fiber.Fiber<void>[] = []
 
         for (const dir of directories) {
-          if (dir.endsWith(".opencode") || dir === Flag.OPENCODE_CONFIG_DIR) {
-            for (const file of ["opencode.json", "opencode.jsonc"]) {
-              const source = path.join(dir, file)
-              yield* Effect.logDebug(`loading config from ${source}`)
-              yield* merge(source, yield* loadFile(source, authEnv))
-              result.agent ??= {}
-              result.mode ??= {}
-              result.plugin ??= []
+          if (isConfigDirectory(dir)) {
+            const names = dir.endsWith(".opencode") ? ["opencode"] : FreeCode.configFileNames
+            for (const name of names) {
+              for (const file of [`${name}.json`, `${name}.jsonc`]) {
+                const source = path.join(dir, file)
+                yield* Effect.logDebug(`loading config from ${source}`)
+                yield* merge(source, yield* loadFile(source, authEnv))
+                result.agent ??= {}
+                result.mode ??= {}
+                result.plugin ??= []
+              }
             }
           }
 
