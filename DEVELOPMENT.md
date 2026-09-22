@@ -215,17 +215,85 @@ software-engineering traces**, not more prompt engineering. The measurement
 harness is in place, so that work can be judged by numbers instead of impressions.
 Until then, keep the tier a conservative floor and let the rules lead.
 
+## Resource scheduling
+
+`model: auto` resolves in two halves. The router decides *what capability the task
+needs*; the scheduler decides *which resource should pay for it*, using quota,
+health, latency, reliability and cost.
+
+```
+S = 0.30C + 0.25Q + 0.20H + 0.10L + 0.10R + 0.05K
+```
+
+Every term points the same way — higher is better, `cost` included — which is the
+only thing that keeps the weights comparable to each other.
+
+Hard filters (tier served, capability floor, open circuit, exhausted quota) are
+kept separate from scoring, so a low score can never be mistaken for a hard no. An
+observed run:
+
+```
+freecode schedule tier=standard
+  chosen="deepseek/deepseek-v4-pro score=0.765 (capability=0.70 quota=0.50
+          health=1.00 latency=0.89 reliability=1.00 cost=0.83)"
+  eligible=1 total=2
+```
+
+### What is real data and what is not
+
+- **Quota, health, latency, reliability** come from `observe.ts`, which records
+  every provider turn's outcome into `$XDG_DATA_HOME/freecode/freecode/resources.json`.
+  Verified: 25 attempts and 25 latency samples recorded from real runs.
+- **Cost** comes from the catalogue's real output-token price against a nominal
+  cheap-model price, so it is comparable between runs and pools.
+- **Capability** is only partly real. OpenCode's catalogue exposes
+  `capabilities.reasoning` as a boolean and nothing else that maps onto "how good
+  is this at coding", so reasoning/coding/review are derived from that flag and
+  the rest is a documented placeholder. Inventing scores from model names would
+  produce a scheduler that routes by branding.
+
+### Failure classification
+
+Only provider-side failures degrade health or open a circuit. A task that fails
+because the code is hard is recorded as an attempt but must not count against the
+account, or the scheduler learns to avoid its best model. Interruptions are
+discarded entirely: a user pressing Ctrl-C is not evidence about a provider.
+
+### Account pools need no upstream change
+
+Upstream resolves credentials per provider id, so one provider id cannot hold two
+keys. An account pool is therefore several provider ids sharing a vendor prefix —
+`deepseek-main`, `deepseek-backup` — and the scheduler groups them with
+`vendorOf`. This is the honest implementation of "one provider, many accounts"
+rather than a fake one: it works with the upstream credential model instead of
+fighting it.
+
+### Two bugs the tests caught
+
+1. `eligible` returned early for a resource with no observed state, which skipped
+   the capability filter entirely — so the weakest model in the pool could win a
+   task that required a strong one.
+2. The cost term was subtracted while being defined as "higher means cheaper",
+   which silently inverted the preference and made the priciest candidate win.
+   Two metrics in one benchmark hid the same class of mistake earlier.
+
+### Resolution must happen inside the routing Effect
+
+`Effect.runPromise` starts a fresh runtime with no instance context, so a pool
+lookup performed that way fails with `InstanceRef not provided`. Pool entries are
+resolved inside the routing Effect and handed to the pure builder.
+
 ## Regression check
 
-`bun test test/config test/provider` from `packages/opencode`:
+`bun test test/config test/provider test/freecode` from `packages/opencode`:
 
 | State | Result |
 | --- | --- |
 | Frozen baseline (`e027eb5`, no FreeCode changes) | 939 pass, 3 skip, **5 fail** |
-| Current `freecode-main` | 939 pass, 3 skip, **5 fail** |
+| Current `freecode-main` | 964 pass, 3 skip, **5 fail** |
 
-Identical counts, so the five failures ship with the upstream snapshot and are not
-regressions:
+The five failures are identical on both, so they ship with the upstream snapshot
+and are not regressions:
 
 - creates global jsonc config with schema when no global configs exist
 - native project MCP servers override inherited V1 disabled state
@@ -239,7 +307,8 @@ failures. Stash the working tree, run the tests, then restore instead.
 
 ## Not started
 
-Resource scheduler with scoring, multi-account provider profiles, quota and health
-tracking, circuit breaking, failure classification with automatic fallback,
-worktree isolation for concurrent writers, packaging.
+Automatic runtime failover (a provider failure switching accounts mid-turn without
+spending the Head agent's tokens), worktree isolation for concurrent writers,
+packaging and an installer.
+
 
