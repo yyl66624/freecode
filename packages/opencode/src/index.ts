@@ -32,6 +32,7 @@ import { Heap } from "./cli/heap"
 import { RoutesCommand } from "./cli/cmd/routes"
 import { TasksCommand } from "./cli/cmd/tasks"
 import { DoctorCommand } from "./cli/cmd/doctor"
+import { SetupCommand } from "./cli/cmd/setup"
 
 const args = hideBin(process.argv)
 
@@ -99,6 +100,7 @@ const cli = yargs(args)
   .command(RoutesCommand)
   .command(TasksCommand)
   .command(DoctorCommand)
+  .command(SetupCommand)
   .command(StatsCommand)
   .command(ExportCommand)
   .command(ImportCommand)

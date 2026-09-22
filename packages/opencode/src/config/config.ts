@@ -686,12 +686,25 @@ const layer = Layer.effect(
         const serialized = JSON.stringify(merged, null, 2)
         next = yield* decodeConfig(merged, file)
         changed = serialized !== before
-        if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
+        if (changed) {
+          // Logged before dying: a failed global-config write previously surfaced as
+          // a defect with no context, and a caller reporting "saved" while nothing
+          // reached disk is the worst version of that.
+          yield* fs
+            .writeFileString(file, serialized)
+            .pipe(Effect.tapError((error) => Effect.logError("failed to write the global config", { file, error: String(error) })))
+            .pipe(Effect.orDie)
+        }
       } else {
         const updated = patchJsonc(before, patch)
         next = yield* decodeConfig(ConfigParse.jsonc(updated, file), file)
         changed = updated !== before
-        if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
+        if (changed) {
+          yield* fs
+            .writeFileString(file, updated)
+            .pipe(Effect.tapError((error) => Effect.logError("failed to write the global config", { file, error: String(error) })))
+            .pipe(Effect.orDie)
+        }
       }
 
       if (changed) yield* invalidate()

@@ -459,6 +459,56 @@ is in `dist`. Two habits follow. Rebuild before testing a packaged binary, and n
 conclude "the feature is broken" from a packaged run without checking the artifact's
 timestamp first.
 
+### First-run setup
+
+`freecode setup` takes a machine with no configuration to one that can run a task,
+interactively or entirely by flag so the same path is scriptable.
+
+**Secrets never go in the configuration file.** The key is written to
+`~/.freecode/secrets.env` at mode 600 and referenced from config as `{file:...}`. A
+config file gets committed, pasted into issues and synced between machines, and a
+secret in one is a secret everywhere. `--env VAR` is offered for users who would
+rather keep it in their shell environment, which is what an existing OpenCode setup
+already does.
+
+The pool is filled at every tier **at and above** the declared one, so a new user
+with one model never routes into an empty tier, while tiers below stay empty — a
+strong model does not imply a cheap one.
+
+Setup validates the merged config against the loader's own schema **before**
+writing. `updateGlobal` writes the file first and decodes the result afterwards, so
+a patch the schema rejects would reach the disk and only fail on the next read,
+breaking the configuration with the command meant to set it up.
+
+A re-run reports `was already configured exactly this way, so nothing changed`
+rather than `saved`. A no-op that reports success is how a user concludes setup ran
+when nothing about their configuration changed.
+
+### Verified
+
+| Check | Result |
+| --- | --- |
+| `setup --provider … --api-key … --model …` into an isolated prefix | key written mode 600, config written with a `{file:…}` reference and a filled pool |
+| Re-running the same setup | reports no change instead of claiming a save |
+| `--provider "bad/id"` | refused before anything is written, with the reason |
+| `--model` missing | refused by validation |
+| `doctor` after setup | reports the pool and the configured providers |
+
+### Two bugs the tests and the runs found
+
+1. **`writeSecret` never replaced a key.** It filtered lines with
+   `startsWith("VAR=")` while writing `export VAR=…`, so the filter never matched
+   and rotating a key left the old one in the file beside the new one. Caught by the
+   test, not by inspection.
+2. **The development runner ignored `XDG_*` an environment already set.** It
+   assigned rather than defaulted, so a test that pointed `XDG_CONFIG_HOME` at its
+   own prefix silently wrote into the shared development config instead. The runner
+   now defaults, and a test's own prefix wins.
+
+A global-config write failure is also logged now rather than surfacing as a bare
+defect: `updateGlobal` used `Effect.orDie` with no context, which is exactly the
+shape of failure where a caller reports success and nothing reached the disk.
+
 ## Regression check
 
 `bun test test/config test/provider test/freecode` from `packages/opencode`:
@@ -605,7 +655,7 @@ for a doubled application name first.
 | State | Result |
 | --- | --- |
 | Frozen baseline (`e027eb5`, no FreeCode changes) | 939 pass, 3 skip, **5 fail** |
-| Current `freecode-main` | 1044 pass, 3 skip, **5 fail** |
+| Current `freecode-main` | 1061 pass, 3 skip, **5 fail** |
 
 The five failures are identical on both, so they ship with the upstream snapshot
 and are not regressions:

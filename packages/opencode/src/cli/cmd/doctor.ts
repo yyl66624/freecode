@@ -17,13 +17,18 @@ import { Doctor } from "@/freecode/doctor"
 export const DoctorCommand = effectCmd({
   command: "doctor",
   describe: "check that FreeCode's environment is complete",
+  // The workspace it reports is the one it is pointed at, so `--dir` has to work
+  // here exactly as it does for `run`.
+  directory: (args: unknown) => (args as { dir?: string }).dir ?? process.cwd(),
   builder: (yargs) =>
-    yargs.option("json", {
-      describe: "emit machine-readable output",
-      type: "boolean",
-    }),
+    yargs
+      .option("json", {
+        describe: "emit machine-readable output",
+        type: "boolean",
+      })
+      .option("dir", { describe: "project directory to check", type: "string" }),
   handler: Effect.fn("Cli.doctor")(function* (raw: unknown) {
-    const args = raw as { json?: boolean }
+    const args = raw as { json?: boolean; dir?: string }
     const instance = yield* InstanceState.context
     const config = yield* Config.Service
     const cfg = yield* config.get()
