@@ -14,6 +14,9 @@ import { Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
+import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef } from "@/effect/instance-ref"
+import { Isolation as FreeCodeIsolation } from "@/freecode/isolation"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -199,7 +202,23 @@ export const TaskTool = Tool.define(
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         const parts = yield* ops.resolvePromptParts(params.prompt)
-        const result = yield* ops.prompt({
+
+        // FreeCode seam. A subagent that can write gets its own git worktree, so
+        // two writers cannot overwrite each other. The isolation is real rather
+        // than advisory: every file tool resolves its directory from
+        // `InstanceRef`, so providing a different instance redirects the whole
+        // subagent — reads, edits, bash — into the worktree.
+        const instance = yield* InstanceState.context
+        const isolated = yield* FreeCodeIsolation.prepare({
+          repository: instance.worktree,
+          sessionID: nextSession.id,
+          agent: next.name,
+          rules: next.permission,
+          policy: cfg.freecode?.isolation,
+          mode: next.workspaceMode,
+        })
+
+        const prompt = ops.prompt({
           messageID: MessageID.ascending(),
           sessionID: nextSession.id,
           model: {
@@ -210,6 +229,17 @@ export const TaskTool = Tool.define(
           agent: next.name,
           parts,
         })
+
+        const result = yield* (isolated
+          ? Effect.provideService(prompt, InstanceRef, {
+              ...instance,
+              directory: isolated.directory,
+              // The worktree is the project for this subagent: reporting the
+              // original worktree would make `external_directory` permissions
+              // treat its own files as outside the project.
+              worktree: isolated.directory,
+            })
+          : prompt)
         if (result.info.role === "assistant" && result.info.error) {
           const message =
             "message" in result.info.error.data && typeof result.info.error.data.message === "string"

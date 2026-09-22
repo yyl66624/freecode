@@ -116,6 +116,10 @@ export const Info = Schema.Struct({
         description:
           "Model pool per capability tier for `model: auto`. Keys are tiers (local, fast, standard, strong, max); values are `provider/model` ids in preference order. An empty tier falls back to the session default model.",
       }),
+      isolation: Schema.optional(Schema.Literals(["auto", "always", "never"])).annotate({
+        description:
+          "Whether subagents that can write get their own git worktree. 'auto' (default) isolates writers and shares readers, 'always' isolates every subagent, 'never' disables isolation.",
+      }),
     }),
   ).annotate({ description: "FreeCode auto model routing" }),
   mcp: Schema.optional(

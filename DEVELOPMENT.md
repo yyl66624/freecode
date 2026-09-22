@@ -429,7 +429,7 @@ for a doubled application name first.
 | State | Result |
 | --- | --- |
 | Frozen baseline (`e027eb5`, no FreeCode changes) | 939 pass, 3 skip, **5 fail** |
-| Current `freecode-main` | 1009 pass, 3 skip, **5 fail** |
+| Current `freecode-main` | 1033 pass, 3 skip, **5 fail** |
 
 The five failures are identical on both, so they ship with the upstream snapshot
 and are not regressions:
@@ -444,12 +444,78 @@ Checking out the baseline commit directly does **not** work for this comparison:
 bun cannot resolve the workspace from that state and reports ~185 spurious
 failures. Stash the working tree, run the tests, then restore instead.
 
+## Worktree isolation
+
+OpenCode's permission system is not a sandbox, and two agents editing one checkout
+is a race no permission rule can arbitrate: whoever writes last wins and the
+other's work is silently gone. A worktree gives each writer its own files, and a
+branch means the result is reviewed as a diff rather than already merged.
+
+**The isolation is real, not advisory.** Every file tool resolves its working
+directory from `InstanceRef`, so giving a subagent a different instance redirects
+its entire world — reads, edits, bash, snapshot tracking, file watching.
+
+Verified end to end on a real repository: a writing subagent ran, and
+
+```
+freecode isolated subagent agent=coder
+  directory=…/proj3/.freecode/worktrees/ses_…  branch=freecode/ses_…
+```
+
+- the main checkout's `geom.py` was **unchanged**;
+- the docstring appeared only inside the worktree;
+- `freecode tasks` listed the task as `1 file(s)  M geom.py`;
+- `freecode tasks diff <id>` printed the patch;
+- `freecode tasks merge <id>` merged it, removed the worktree, and the main
+  checkout then contained the change.
+
+### Placement
+
+`.freecode/worktrees/<task-id>` — inside the repository on purpose. A repository
+cannot track a worktree of itself, so git ignores it automatically: nothing has to
+be added to the user's `.gitignore`, and cleanup is a local `rmSync` rather than a
+walk over a sibling directory.
+
+### Policy
+
+`auto` (the default) isolates writers and shares readers, which is the only
+default that makes concurrent agents safe without paying for a worktree on every
+read. An agent declares `workspace_mode: shared | isolated | auto` in frontmatter;
+`freecode.isolation` sets `auto | always | never` and `never` outranks the agent's
+own request.
+
+An agent is treated as a writer unless its permission rules clearly deny writing.
+The asymmetry is deliberate: an agent wrongly treated as a writer gets a worktree
+it did not need, while one wrongly treated as a reader edits the shared checkout
+alongside other agents. The second mistake is the one that loses work.
+
+Isolation never blocks a subagent. A project that is not a git repository, or a
+worktree git refuses to create, logs why and runs in the shared checkout —
+refusing to start would be a worse outcome than the concurrency risk isolation
+exists to avoid.
+
+Merging refuses rather than guesses. A repository with uncommitted changes is the
+user's call, a task that changed nothing does not get a noise commit, and
+`--no-ff` keeps the isolated work visible as a unit in history. A conflicting
+merge is **aborted**, because a half-merged tree is the one situation where doing
+something clever is strictly worse than stopping.
+
+### Two git behaviours that broke the first implementation
+
+1. **A worktree inside the repository makes the repository dirty.** `git status`
+   in the parent reported FreeCode's own scratch directory as untracked, so every
+   merge was refused by FreeCode's dirty-tree guard — a guard tripped by FreeCode
+   itself. The check now excludes `.freecode/worktrees`.
+2. **`git worktree list` reports resolved paths.** On macOS a repository reached
+   through `/tmp` comes back as `/private/tmp`, so comparing our path with git's
+   never matched and `tasks list` reported nothing. Paths are canonicalised on the
+   way in and out.
+
 ## Not started
 
-Worktree isolation for concurrent writers (v0.3), Laya fine-tuning on the routing
-data FreeCode now produces (v0.4), and a wider routing benchmark — 100-200 cases
-weighted toward the boundaries the rules get wrong, rather than uniformly
-sampling cases both rule and model find easy.
+Laya fine-tuning on the routing data FreeCode now produces (v0.4), and a wider
+routing benchmark — 100-200 cases weighted toward the boundaries the rules get
+wrong, rather than uniformly sampling cases both rule and model find easy.
 
 
 

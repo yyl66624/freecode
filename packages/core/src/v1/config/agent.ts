@@ -17,6 +17,12 @@ const AgentSchema = Schema.StructWithRest(
     tier: Schema.optional(Schema.Literals(["local", "fast", "standard", "strong", "max"])).annotate({
       description: "Minimum model capability tier for this agent when model is 'auto'",
     }),
+    // FreeCode addition. Where this agent's file edits happen when it runs as a
+    // subagent. `auto` isolates writers and shares readers, which is the only
+    // default that makes concurrent agents safe without punishing cheap reads.
+    workspace_mode: Schema.optional(Schema.Literals(["shared", "isolated", "auto"])).annotate({
+      description: "Where this agent works: 'shared' uses the project directly, 'isolated' uses a git worktree, 'auto' isolates only agents that can write (default: auto)",
+    }),
     variant: Schema.optional(Schema.String).annotate({
       description: "Default model variant for this agent (applies only when using the agent's configured model).",
     }),
