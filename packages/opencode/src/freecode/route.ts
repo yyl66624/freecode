@@ -3,6 +3,8 @@ export * as Route from "./route"
 import * as Effect from "effect/Effect"
 import { RoutingRef } from "./context"
 import { ModelPool } from "./pool"
+import { Resources } from "./resources"
+import { Scheduler } from "./scheduler"
 import { ModelResolver } from "./resolver"
 import type { ProviderV2 } from "@opencode-ai/core/provider"
 import type { ModelV2 } from "@opencode-ai/core/model"
@@ -32,6 +34,16 @@ import type { ModelV2 } from "@opencode-ai/core/model"
 export interface ResolvedModel {
   readonly id: string
   readonly providerID: string
+  /**
+   * Catalogue metadata, when the registry supplies it.
+   *
+   * Typed minimally rather than as `Provider.Model`, for the same reason this
+   * interface exists at all: importing the provider's model type would rebuild
+   * the type cycle. The scheduler reads real `capabilities.reasoning` and
+   * `cost.output` off these, so they are optional-but-honest rather than absent.
+   */
+  readonly capabilities?: { readonly reasoning?: boolean }
+  readonly cost?: { readonly input?: number; readonly output?: number }
 }
 
 export interface Registry {
@@ -120,23 +132,62 @@ function resolve(
       reason: resolution.reason,
     })
 
-    const selected = yield* Effect.promise(() =>
-      ModelPool.select(registry.pool, resolution.tier, (candidateProvider, candidateModel) =>
-        Effect.runPromise(registry.get(candidateProvider, candidateModel)),
-      ),
-    )
+    // The scheduler's job: turn "this task needs tier X" into the best concrete
+    // resource given quota, health, latency, reliability and cost. It filters
+    // hard on tier and capability, then scores what remains.
+    // Resolved inside this Effect, not via `Effect.runPromise`: the registry
+    // lookup needs the instance context that this fiber carries, and a fresh
+    // runtime started from a promise would not have it.
+    const resolved = yield* resolvePool(registry)
+    const candidates = Resources.build({ pool: registry.pool, model: (p, m) => resolved.get(`${p}/${m}`) })
+    const winner = Scheduler.select(candidates, { tier: resolution.tier })
 
-    if (!selected) {
-      // An empty tier is a configuration state, not an error: the session keeps
-      // the model it would have used anyway, and the log says why.
-      yield* Effect.logInfo("freecode route found no model for tier, using the caller default", {
+    if (!winner) {
+      // Either the tier has no pool entry, or every entry is currently
+      // ineligible — an exhausted quota, an open circuit. Both are states, not
+      // errors: the session keeps the model it would have used anyway.
+      yield* Effect.logInfo("freecode route found no eligible model for tier, using the caller default", {
         tier: resolution.tier,
         configured: ModelPool.configuredTiers(registry.pool),
+        pool: Resources.report(candidates),
       })
       return yield* resolveFallback(registry)
     }
 
-    return selected
+    yield* Effect.logInfo("freecode schedule", {
+      tier: resolution.tier,
+      chosen: Scheduler.explain(winner),
+      eligible: Scheduler.rank(candidates, { tier: resolution.tier }).length,
+      total: candidates.length,
+    })
+
+    return yield* registry.get(winner.candidate.resource.provider, winner.candidate.resource.model)
+  })
+}
+
+/**
+ * Resolve every configured pool entry to a registered model.
+ *
+ * An entry naming a provider or model this user has not configured is absent from
+ * the result rather than fatal, which is also what makes a typo in the pool
+ * harmless. Failures are caught per entry so one bad line cannot empty the pool.
+ */
+function resolvePool(registry: Registry) {
+  return Effect.gen(function* () {
+    const resolved = new Map<string, ResolvedModel>()
+    for (const entries of Object.values(registry.pool)) {
+      if (!Array.isArray(entries)) continue
+      for (const entry of entries) {
+        if (resolved.has(entry)) continue
+        const separator = entry.indexOf("/")
+        if (separator === -1) continue
+        const model = yield* registry.get(entry.slice(0, separator), entry.slice(separator + 1)).pipe(
+          Effect.catch(() => Effect.succeed(undefined)),
+        )
+        if (model) resolved.set(entry, model)
+      }
+    }
+    return resolved
   })
 }
 
