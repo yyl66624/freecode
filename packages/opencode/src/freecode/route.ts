@@ -6,6 +6,7 @@ import { ModelPool } from "./pool"
 import { Resources } from "./resources"
 import { Scheduler } from "./scheduler"
 import { Fallback } from "./fallback"
+import { Decision } from "./decision"
 import type { Tier } from "./resolver"
 import { ModelResolver } from "./resolver"
 import type { ProviderV2 } from "@opencode-ai/core/provider"
@@ -142,7 +143,8 @@ function resolve(
     // runtime started from a promise would not have it.
     const resolved = yield* resolvePool(registry)
     const candidates = Resources.build({ pool: registry.pool, model: (p, m) => resolved.get(`${p}/${m}`) })
-    const winner = Scheduler.select(candidates, { tier: resolution.tier })
+    const ranking = Scheduler.rank(candidates, { tier: resolution.tier })
+    const winner = ranking[0]
 
     if (!winner) {
       // Either the tier has no pool entry, or every entry is currently
@@ -153,14 +155,37 @@ function resolve(
         configured: ModelPool.configuredTiers(registry.pool),
         pool: Resources.report(candidates),
       })
+      Decision.write({
+        agent: routing.agent,
+        task: routing.task,
+        mode: resolution.mode,
+        tier: resolution.tier,
+        routing: resolution.decision,
+        routingReason: resolution.reason,
+        fallbackReason: `no eligible model for tier ${resolution.tier}`,
+        candidates: Decision.candidates(candidates, ranking),
+      })
       return yield* resolveFallback(registry)
     }
 
     yield* Effect.logInfo("freecode schedule", {
       tier: resolution.tier,
       chosen: Scheduler.explain(winner),
-      eligible: Scheduler.rank(candidates, { tier: resolution.tier }).length,
+      eligible: ranking.length,
       total: candidates.length,
+    })
+
+    // Fully recorded, not summarised: `/why` has to answer "why not the other
+    // one" as well as "why this one", and a log line cannot.
+    Decision.write({
+      agent: routing.agent,
+      task: routing.task,
+      mode: resolution.mode,
+      tier: resolution.tier,
+      routing: resolution.decision,
+      routingReason: resolution.reason,
+      selected: winner.candidate.resource.id,
+      candidates: Decision.candidates(candidates, ranking),
     })
 
     return yield* registry.get(winner.candidate.resource.provider, winner.candidate.resource.model)
