@@ -110,6 +110,14 @@ export const Info = Schema.Struct({
   provider: Schema.optional(Schema.Record(Schema.String, ConfigProviderV1.Info)).annotate({
     description: "Custom provider configurations and model overrides",
   }),
+  freecode: Schema.optional(
+    Schema.Struct({
+      pool: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.String))).annotate({
+        description:
+          "Model pool per capability tier for `model: auto`. Keys are tiers (local, fast, standard, strong, max); values are `provider/model` ids in preference order. An empty tier falls back to the session default model.",
+      }),
+    }),
+  ).annotate({ description: "FreeCode auto model routing" }),
   mcp: Schema.optional(
     Schema.Record(Schema.String, Schema.Union([ConfigMCPV1.Info, Schema.Struct({ enabled: Schema.Boolean })])),
   ).annotate({ description: "MCP (Model Context Protocol) server configurations" }),

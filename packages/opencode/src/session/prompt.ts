@@ -56,6 +56,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { FreeCodeContext } from "@/freecode/context"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -632,6 +633,16 @@ const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
+
+    /**
+     * One user turn.
+     *
+     * The body is wrapped in a nested effect purely so the FreeCode routing
+     * context can be published for the entire turn: the model is resolved a few
+     * lines in, and `auto` routing needs the agent and task text before that.
+     * Publishing it around the whole body also covers the subagent sessions the
+     * Task tool starts from here, which route on their own prompts.
+     */
     const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
@@ -643,12 +654,36 @@ const layer = Layer.effect(
         throw error
       }
 
+      // FreeCode seam. Publish what this turn is about before the model is
+      // chosen, so `model: auto` can be resolved instead of persisted as a
+      // placeholder. This context also covers the subagent sessions the Task
+      // tool starts from here, which route on their own prompts.
+      return yield* Effect.provideService(
+        remainder(input, ag),
+        FreeCodeContext.RoutingRef,
+        FreeCodeContext.context(ag, input.parts),
+      )
+    }, Effect.scoped)
+
+    const remainder = Effect.fnUntraced(function* (input: PromptInput, ag: Agent.Info) {
       const model = input.model ?? ag.model ?? (yield* currentModel(input.sessionID))
-      const same = ag.model && model.providerID === ag.model.providerID && model.modelID === ag.model.modelID
+
+      // FreeCode seam. Resolve the routing sentinel here, before anything is
+      // persisted, so the stored user message and session record always name a
+      // concrete model. Routing reads the task text, which is why it happens at
+      // this level rather than inside the provider layer.
+      const routed =
+        model.providerID === "freecode" && model.modelID === "auto"
+          ? yield* provider
+              .getModel(model.providerID, model.modelID)
+              .pipe(Effect.catch(() => Effect.succeed(undefined)))
+          : undefined
+      const chosen = routed ? { providerID: routed.providerID, modelID: routed.id } : model
+      const same = ag.model && chosen.providerID === ag.model.providerID && chosen.modelID === ag.model.modelID
       const full =
         !input.variant && ag.variant && same
           ? yield* provider
-              .getModel(model.providerID, model.modelID)
+              .getModel(chosen.providerID, chosen.modelID)
               .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)))
           : undefined
       const variant = input.variant ?? (ag.variant && full?.variants?.[ag.variant] ? ag.variant : undefined)
@@ -661,8 +696,8 @@ const layer = Layer.effect(
         tools: input.tools,
         agent: ag.name,
         model: {
-          providerID: model.providerID,
-          modelID: model.modelID,
+          providerID: chosen.providerID,
+          modelID: chosen.modelID,
           variant,
         },
         system: input.system,
@@ -1047,7 +1082,7 @@ const layer = Layer.effect(
       for (const part of parts) yield* sessions.updatePart(part)
 
       return { info, parts }
-    }, Effect.scoped)
+    })
 
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
       "SessionPrompt.prompt",

@@ -31,6 +31,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { Route as FreeCodeRoute } from "@/freecode/route"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000
 
@@ -1212,6 +1213,12 @@ interface State {
   sdk: Map<string, BundledSDK>
   modelLoaders: Record<string, CustomModelLoader>
   varsLoaders: Record<string, CustomVarsLoader>
+  /**
+   * FreeCode capability-tier pools. Carried on the state rather than read from
+   * `Config.Service` at routing time so the routing seam adds no service
+   * requirement to `getModel`, which is declared as requiring none.
+   */
+  tierPool: Record<string, string[] | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Provider") {}
@@ -1725,6 +1732,7 @@ const layer = Layer.effect(
           sdk,
           modelLoaders,
           varsLoaders,
+          tierPool: cfg.freecode?.pool ?? {},
         }
       }),
     )
@@ -1869,7 +1877,18 @@ const layer = Layer.effect(
       InstanceState.use(state, (s) => s.providers[providerID]),
     )
 
-    const getModel = Effect.fn("Provider.getModel")(function* (providerID: ProviderV2.ID, modelID: ModelV2.ID) {
+    /**
+     * Look up a registered model by name.
+     *
+     * Split out from `getModel` so the FreeCode routing seam can resolve a
+     * concrete model without recursing through the seam itself: a plain named
+     * lookup has no routing to do, and keeping it separate removes the
+     * self-referential type inference that a recursive `getModel` would cause.
+     */
+    const lookup = Effect.fn("Provider.lookupModel")(function* (
+      providerID: ProviderV2.ID,
+      modelID: ModelV2.ID,
+    ) {
       const s = yield* InstanceState.get(state)
       const provider = s.providers[providerID]
       if (!provider) {
@@ -1891,6 +1910,43 @@ const layer = Layer.effect(
         return yield* new ModelNotFoundError({ providerID, modelID, suggestions })
       }
       return info
+    })
+
+    // The return type is annotated, not inferred. `getModel` calls the FreeCode
+    // routing seam, whose signatures mention this function's own callback type;
+    // leaving the type implicit makes TypeScript see a cycle through itself and
+    // silently degrade the whole seam to `any`, which would switch off checking
+    // exactly where routing is wired in.
+    const getModel: (
+      providerID: ProviderV2.ID,
+      modelID: ModelV2.ID,
+    ) => Effect.Effect<Model, ModelNotFoundError> = Effect.fn("Provider.getModel")(function* (
+      providerID: ProviderV2.ID,
+      modelID: ModelV2.ID,
+    ) {
+      // FreeCode seam. `model: auto` reaches here as the sentinel pair
+      // `freecode/auto` (configuration and the agent registry) or as
+      // `freecode` with an empty model id (the Task tool, which round-trips a
+      // subagent's model through session state). This is the only place a model
+      // reference becomes a real registered model, so routing cannot be bypassed
+      // by a new call site and cannot drift between the Task tool, the agent
+      // registry, and the session prompt.
+      const snapshot = yield* InstanceState.get(state)
+      const routed = yield* FreeCodeRoute.auto(providerID, modelID, {
+        pool: snapshot.tierPool,
+        // Deterministic default, used only when a sentinel arrives with no
+        // routing context — a subagent resolving outside the turn that spawned
+        // it. The instance default is the same choice a session without a
+        // configured model would make, so routing degrades to today's behaviour
+        // instead of failing.
+        fallback: firstAvailableModel(snapshot),
+        get: (candidateProvider, candidateModel) =>
+          lookup(ProviderV2.ID.make(candidateProvider), ModelV2.ID.make(candidateModel)).pipe(
+            Effect.catch(() => Effect.succeed(undefined)),
+          ),
+      })
+      if (routed) return yield* lookup(ProviderV2.ID.make(routed.providerID), ModelV2.ID.make(routed.id))
+      return yield* lookup(providerID, modelID)
     })
 
     const getLanguage = Effect.fn("Provider.getLanguage")(function* (model: Model) {
@@ -2040,9 +2096,25 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
+    // Bound to a name so a routed lookup can reuse the same service object
+    // rather than reconstructing it.
+    const api = Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
+    return api
   }),
 )
+
+/**
+ * The instance's deterministic default model, used when a routing sentinel
+ * reaches the provider without a routing context.
+ */
+function firstAvailableModel(state: State): { providerID: ProviderV2.ID; modelID: ModelV2.ID } | undefined {
+  const configured = Object.keys(state.providers)
+  const provider = configured.length ? state.providers[ProviderV2.ID.make(configured[0])] : undefined
+  if (!provider) return undefined
+  const [model] = sort(Object.values(provider.models))
+  if (!model) return undefined
+  return { providerID: provider.id, modelID: model.id }
+}
 
 const priority = ["gpt-5", "claude-sonnet-4", "big-pickle", "gemini-3-pro"]
 const smallModelFamilyPriority = ["gemini-flash", "gpt-nano", "claude-haiku"]
@@ -2058,7 +2130,10 @@ export function sort<T extends { id: string }>(models: T[]) {
 export function parseModel(model: string) {
   const [providerID, ...rest] = model.split("/")
   return {
-    providerID: ProviderV2.ID.make(providerID),
+    // A bare `auto` is FreeCode's routing sentinel, not a provider. Spelling it
+    // as `freecode/auto` lets one check catch both `model: auto` and the
+    // explicit `freecode/auto` form without touching provider ids.
+    providerID: ProviderV2.ID.make(providerID === "auto" ? "freecode" : providerID),
     modelID: ModelV2.ID.make(rest.join("/")),
   }
 }

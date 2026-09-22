@@ -1,0 +1,16 @@
+# FreeCode Laya bridge runtime.
+#
+# Install into a dedicated venv — the bridge is a long-lived subprocess and must
+# not depend on whatever the user's global Python happens to have:
+#
+#   uv venv .runtime/laya-venv
+#   VIRTUAL_ENV=.runtime/laya-venv uv pip install -r requirements.txt
+#
+# The `laya` package itself is vendored in this repository (`laya-main/`); it is
+# added to sys.path by `main.py` rather than installed, so FreeCode always runs
+# the SDK revision that ships with it.
+torch>=2.0.0
+transformers>=4.48.0
+safetensors>=0.4.0
+huggingface_hub>=0.20.0
+numpy>=1.20.0

@@ -1,7 +1,23 @@
 {
-  // FreeCode project config. Internal package names remain @opencode-ai/* —
-  // see ../UPSTREAM.md for why.
+  // FreeCode routing configuration.
+  //
+  // `pool` maps a capability tier to the models that satisfy it, in preference
+  // order. Laya decides which tier a task needs; the pool decides which of the
+  // models this user actually has is used for it.
+  //
+  // This development pool points every tier at DeepSeek because that is the only
+  // provider configured here. A real pool spreads tiers across providers, which
+  // is what makes `model: auto` worth having.
   "$schema": "https://opencode.ai/config.json",
+  "freecode": {
+    "pool": {
+      "local": ["deepseek/deepseek-flash"],
+      "fast": ["deepseek/deepseek-flash"],
+      "standard": ["deepseek/deepseek-v4-pro"],
+      "strong": ["deepseek/deepseek-v4-pro"],
+      "max": ["deepseek/deepseek-v4-pro"]
+    }
+  },
   "provider": {
     "deepseek": {
       "npm": "@ai-sdk/openai-compatible",

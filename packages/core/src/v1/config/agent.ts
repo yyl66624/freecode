@@ -12,6 +12,11 @@ const Color = Schema.Union([
 const AgentSchema = Schema.StructWithRest(
   Schema.Struct({
     model: Schema.optional(Schema.String),
+    // FreeCode addition. A declared capability floor, applied only when the
+    // model is `auto`; it raises the tier the router chose, never lowers it.
+    tier: Schema.optional(Schema.Literals(["local", "fast", "standard", "strong", "max"])).annotate({
+      description: "Minimum model capability tier for this agent when model is 'auto'",
+    }),
     variant: Schema.optional(Schema.String).annotate({
       description: "Default model variant for this agent (applies only when using the agent's configured model).",
     }),
