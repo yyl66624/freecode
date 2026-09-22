@@ -73,3 +73,13 @@ and would make every future upstream rebase painful.
 
 Upstream is MIT. FreeCode retains the original `LICENSE` and copyright notices,
 and this file plus `NOTICE` record the provenance of the fork.
+
+## Where to look for what
+
+| File | Contents |
+| --- | --- |
+| `UPSTREAM.md` | provenance, rebase procedure, rebranding scope |
+| `DEVELOPMENT.md` | measurements, traps, and verified results from building the fork |
+| `packages/opencode/src/freecode/` | every FreeCode-owned module |
+| `packages/opencode/src/freecode/router/` | the Python Laya bridge and the TS client |
+
