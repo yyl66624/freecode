@@ -19,11 +19,16 @@ const dir = path.resolve(import.meta.dir, "..")
 process.chdir(dir)
 
 const pkg = await Bun.file("./package.json").json()
+// `pkg.version` is FreeCode's own release version. The upstream OpenCode base is
+// recorded separately in UPSTREAM.md, so this string stays a product version rather
+// than an encoding of the fork's lineage.
 const version = pkg.version as string
 
-const outfile = "dist/freecode/bin/freecode"
-await $`rm -rf dist/freecode`
-await $`mkdir -p dist/freecode/bin`
+const target = `freecode-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`
+const outdir = `dist/${target}`
+const outfile = `${outdir}/bin/freecode`
+await $`rm -rf ${outdir}`
+await $`mkdir -p ${outdir}/bin`
 
 // The Solid transform is needed because the TUI is written with it; without the
 // plugin the build fails on JSX it cannot parse.
@@ -99,5 +104,5 @@ if (!helpText.includes("freecode")) {
   process.exit(1)
 }
 
-console.log(`ok  dist/freecode/bin/freecode`)
+console.log(`ok  ${outfile}`)
 console.log(`next: ./install.sh`)

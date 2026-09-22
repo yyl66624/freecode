@@ -39,3 +39,6 @@ __pycache__/
 
 # FreeCode: build output
 dist/
+
+# FreeCode: release archives
+dist/release/

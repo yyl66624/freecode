@@ -361,6 +361,104 @@ the same mistake: testing the implementation instead of the contract.
 lookup performed that way fails with `InstanceRef not provided`. Pool entries are
 resolved inside the routing Effect and handed to the pure builder.
 
+## v0.4: CLI packaging
+
+The stage where FreeCode stops being a repository and becomes something that can be
+installed. The acceptance criterion is one a developer cannot satisfy by accident:
+**a Mac that has never seen this repository runs one command, then types `freecode`
+in any project directory and completes a real task.**
+
+### The binary
+
+`bun run package` produces `dist/freecode-darwin-arm64/bin/freecode`, named for the
+platform so a release archive and a local build have the same shape. The leading
+`freecode-` is deliberate: upstream's own `dist/<platform>/` would otherwise
+collide.
+
+The build smoke tests the result **by running it**, twice: that `--version` works,
+and that `--help` names FreeCode. A build that exits zero but produces a binary
+that cannot start is a real historical failure mode for Bun-compiled OpenCode
+binaries, and it is the failure a user would hit.
+
+FreeCode versions on its own line: `0.4.0`, with the upstream base (`1.18.32`)
+recorded separately in `UPSTREAM.md` and `packages/opencode/package.json`. A product
+version should not have to encode the fork's lineage, and a bug report needs both.
+`package.json` set to `0.4.0` while `package.ts` still appended the fork suffix
+produced `0.4.0-freecode.0.4.0` once; the two are now derived from one place.
+
+### A packaged binary must not read a source tree
+
+`bridgeDirectories()` used to include a path computed by walking six levels up from
+`import.meta.url` — the source checkout. That resolves to nonsense inside a compiled
+binary, and worse, it meant an install could silently depend on the machine having
+the repository. It is now gated on `isCompiled()`, which checks for Bun's `/$bunfs`
+prefix, so the source path is **development only**. A development run sets
+`FREECODE_BRIDGE_DIR` explicitly instead, which is honest about what it is.
+
+### The bridge lives where the client looks for it
+
+The installer puts the bridge at `$FREECODE_HOME/bridge` (`~/.freecode/bridge`),
+which `bridgeDirectories()` did not search at all — so after installing, Laya
+silently would not have been found. The search order is now: an explicit override,
+`$FREECODE_HOME/bridge`, the data directory, next to the executable, and finally the
+source checkout in development. The Python interpreter is likewise looked for at
+`$FREECODE_HOME/runtime/laya/venv/bin/python`, which is where the installer builds
+it.
+
+Folder layout, and the reason for the split:
+
+```
+~/.freecode/              installed files: bridge, runtime, logs
+~/.config/freecode/       configuration: freecode.jsonc, agents/
+~/.local/share/freecode/  per-user state: resources.json, last-route.json
+~/.local/share/freecode/snapshot/   project snapshots
+```
+
+Runtime and state are apart so reclaiming disk by deleting the Python runtime does
+not also discard routing history.
+
+### The installer
+
+`scripts/install.sh` installs a local build or a release archive through the same
+code path, so what CI tests is what a user gets. Install directory priority is
+`$FREECODE_INSTALL_DIR` → `$XDG_BIN_DIR` → `~/bin` → `~/.freecode/bin`, checked for
+**writability** rather than existence: a directory on `PATH` that cannot be written
+to is worse than none, because the install appears to succeed and does nothing.
+
+It reports rather than edits `PATH`. A silent edit to someone's `.zshrc` is generous
+once and obnoxious forever.
+
+Laya remains optional in the same way: `FREECODE_SKIP_LAYA=1` installs with no
+Python, and a failed runtime preparation does not fail the install.
+
+`scripts/release.sh` builds `freecode-darwin-arm64.tar.gz` and `SHA256SUMS`. macOS
+ships bsdtar, which has no `--sort` or `--mtime`, so the archive is deterministic as
+far as the platform allows; `COPYFILE_DISABLE=1` matters specifically on macOS,
+because without it bsdtar injects `._` AppleDouble members.
+
+### Verified
+
+| Check | Result |
+| --- | --- |
+| `install.sh` into a clean prefix, `FREECODE_SKIP_LAYA=1` | installed to the requested directory, version `0.4.0` |
+| `install.sh --from-release` against a locally served archive | downloaded, `checksum verified`, unpacked, installed |
+| Tampered archive | `error: checksum mismatch`, exit code 1, **nothing installed** |
+| `freecode doctor` on the installed layout | finds `$FREECODE_HOME/bridge`, reports real git version, and correctly fails on an empty pool |
+| Binary moved to `/tmp` with no source tree, no Laya, real task run | `router unavailable (Laya bridge not found)`, rules degraded, scheduler selected a model, subagent completed the write |
+| Default output | only the model line and the answer; routing and scheduling metrics appear with `--print-logs` |
+
+### The stale-binary trap
+
+An isolation test appeared to fail on the packaged binary: the write landed in the
+main checkout instead of a worktree. The cause was not isolation. The installed
+binary predated the isolation commit, so it did not contain the feature at all.
+
+This is the characteristic risk of the packaging stage: a build artifact silently
+older than the source it claims to represent, and the install script copies whatever
+is in `dist`. Two habits follow. Rebuild before testing a packaged binary, and never
+conclude "the feature is broken" from a packaged run without checking the artifact's
+timestamp first.
+
 ## Regression check
 
 `bun test test/config test/provider test/freecode` from `packages/opencode`:

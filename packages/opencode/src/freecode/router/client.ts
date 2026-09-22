@@ -2,6 +2,7 @@ export * as LayaClient from "./client"
 
 import path from "path"
 import { existsSync } from "fs"
+import os from "os"
 import { Global } from "@opencode-ai/core/global"
 import { fileURLToPath } from "url"
 
@@ -61,24 +62,43 @@ let nextId = 0
 const BRIDGE_SCRIPT = "main.py"
 
 /**
+ * Whether this process is a compiled binary rather than a source checkout.
+ *
+ * Bun reports the compiled entry as living under `/$bunfs`, and a source run has a
+ * real path on disk. The distinction matters because a packaged FreeCode must never
+ * reach into a source tree: an install that silently depends on the machine having
+ * the repository would work on the developer's Mac and fail on everyone else's.
+ */
+function isCompiled() {
+  return import.meta.url.includes("/$bunfs") || process.execPath.endsWith("/freecode")
+}
+
+/**
  * Candidate locations for the bridge, most specific first.
  *
- * Laya is an optional accelerator, not a dependency, so this deliberately
- * searches a packaged install before the source checkout and returns an empty
- * list rather than throwing when nothing is found. A FreeCode with no bridge
- * routes on rules and says so; it does not refuse to start.
+ * Laya is an optional accelerator, not a dependency, so this returns an empty list
+ * rather than throwing when nothing is found. A FreeCode with no bridge routes on
+ * rules and says so; it does not refuse to start.
  *
  * Order:
- *   1. `FREECODE_BRIDGE_DIR` — an explicit override, for tests and unusual installs
- *   2. `<data>/bridge`         — where the installer puts the scripts
- *   3. next to the executable  — a relocatable bundle
- *   4. the source checkout     — development, and the only path that also
- *                                provides the vendored Laya SDK
+ *   1. `FREECODE_BRIDGE_DIR` — explicit, and how a development checkout points at
+ *                              its own working copy of the bridge
+ *   2. `<freecode home>/bridge` — where `scripts/install.sh` puts it, defaulting to
+ *                              `~/.freecode/bridge`
+ *   3. `<data>/bridge`       — a data-directory install, kept for compatibility
+ *   4. next to the executable — a relocatable bundle with no installer at all
+ *   5. the source checkout   — **development only**, never consulted by a compiled
+ *                              binary, so a packaged install cannot accidentally
+ *                              depend on the repository being present
  */
-function bridgeDirectories(): string[] {
+export function bridgeDirectories(): string[] {
   const candidates: string[] = []
   const override = process.env["FREECODE_BRIDGE_DIR"]
   if (override) candidates.push(override)
+
+  // Installer layout. The runtime lives with the rest of FreeCode's own files
+  // rather than with its per-user state, so deleting one does not lose the other.
+  candidates.push(path.join(installationHome(), "bridge"))
 
   // `Global.Path.data` already ends in the application name.
   candidates.push(path.join(Global.Path.data, "bridge"))
@@ -86,11 +106,13 @@ function bridgeDirectories(): string[] {
   const executable = process.execPath
   if (executable) candidates.push(path.join(path.dirname(executable), "bridge"))
 
-  // src/freecode/router/client.ts -> repository root is six levels up, and the
-  // bridge lives back down the tree under opencode-dev.
-  const here = path.dirname(fileURLToPath(import.meta.url))
-  const root = path.resolve(here, "..", "..", "..", "..", "..", "..")
-  candidates.push(path.join(root, "opencode-dev", "packages", "opencode", "src", "freecode", "router"))
+  if (!isCompiled()) {
+    // src/freecode/router/client.ts -> repository root is six levels up, and the
+    // bridge lives back down the tree under opencode-dev.
+    const here = path.dirname(fileURLToPath(import.meta.url))
+    const root = path.resolve(here, "..", "..", "..", "..", "..", "..")
+    candidates.push(path.join(root, "opencode-dev", "packages", "opencode", "src", "freecode", "router"))
+  }
 
   return candidates
 }
@@ -114,6 +136,11 @@ function resolveBridgeScript(): string | undefined {
 function resolvePython(scriptDirectory: string | undefined) {
   const override = process.env["FREECODE_PYTHON"]
   if (override) return override
+
+  // The installer's layout first: `<home>/runtime/laya/venv`.
+  const installed = path.join(installationHome(), "runtime", "laya", "venv", "bin", "python")
+  if (existsSync(installed)) return installed
+
   if (scriptDirectory) {
     for (const relative of [path.join("..", "venv", "bin", "python"), path.join(".venv", "bin", "python")]) {
       const candidate = path.resolve(scriptDirectory, relative)
@@ -121,6 +148,18 @@ function resolvePython(scriptDirectory: string | undefined) {
     }
   }
   return "python3"
+}
+
+/**
+ * FreeCode's own directory, `~/.freecode` by default.
+ *
+ * Holds installed files — the bridge, the Python runtime, logs — as opposed to
+ * `Global.Path.data`, which holds per-user state. Keeping them apart means
+ * reclaiming disk space by deleting the runtime does not also discard routing
+ * history.
+ */
+export function installationHome(): string {
+  return process.env["FREECODE_HOME"] ?? path.join(os.homedir(), ".freecode")
 }
 
 export class Bridge {

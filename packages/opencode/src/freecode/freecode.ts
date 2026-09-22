@@ -31,3 +31,18 @@ export const configFileNames = ["freecode", "opencode", "config"] as const
  * directory. `.opencode` remains supported for backward compatibility.
  */
 export const projectConfigDirs = [Product.projectConfigDir, ".opencode"] as const
+
+/**
+ * FreeCode's release version.
+ *
+ * The compiled binary carries this in `InstallationVersion`, which is what a user
+ * sees from `--version`, `doctor` and bug reports. The upstream OpenCode base is
+ * recorded separately in `UPSTREAM.md` and `packages/opencode/package.json`, so the
+ * product version does not have to encode the fork's lineage.
+ *
+ * Must stay in step with `packages/opencode/package.json`.
+ */
+export const version = "0.4.0"
+
+/** Upstream OpenCode release this fork is based on. Recorded in UPSTREAM.md. */
+export const upstreamVersion = "1.18.32"

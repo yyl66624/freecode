@@ -9,7 +9,8 @@ what we deliberately do *not* change.
 | Field | Value |
 | --- | --- |
 | Upstream project | OpenCode (`anomalyco/opencode`) |
-| Upstream version | `1.18.32` (`packages/opencode/package.json`) |
+| Upstream version | `1.18.32` |
+| FreeCode version | `0.4.0` (`packages/opencode/package.json`) |
 | Base commit SHA | `e027eb570ba2b6d4affa1e4da59af4701d89dac9` |
 | Base tag (local) | `freecode-upstream-base` |
 | Base branch (local) | `freecode-upstream` |

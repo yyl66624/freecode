@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "1.18.32",
+  "version": "0.4.0",
   "name": "opencode",
   "type": "module",
   "license": "MIT",
@@ -155,5 +155,8 @@
   },
   "overrides": {
     "drizzle-orm": "catalog:"
+  },
+  "freecode": {
+    "upstreamBase": "1.18.32"
   }
 }

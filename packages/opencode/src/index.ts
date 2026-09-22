@@ -31,6 +31,7 @@ import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
 import { RoutesCommand } from "./cli/cmd/routes"
 import { TasksCommand } from "./cli/cmd/tasks"
+import { DoctorCommand } from "./cli/cmd/doctor"
 
 const args = hideBin(process.argv)
 
@@ -97,6 +98,7 @@ const cli = yargs(args)
   .command(ModelsCommand)
   .command(RoutesCommand)
   .command(TasksCommand)
+  .command(DoctorCommand)
   .command(StatsCommand)
   .command(ExportCommand)
   .command(ImportCommand)
