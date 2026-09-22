@@ -2,7 +2,7 @@ export * as Scheduler from "./scheduler"
 
 import type { Tier } from "./resolver"
 import type { ResolvedModel } from "./route"
-import type { ResourceState } from "./state"
+import { ResourceState } from "./state"
 
 /**
  * FreeCode's model selection beyond the capability tier.
@@ -154,19 +154,15 @@ function meetsCapabilityNeed(resource: Resource, requirements: Requirements): bo
   })
 }
 
-/** Whether observed state permits another attempt right now. */
+/**
+ * Whether observed state permits another attempt right now.
+ *
+ * Delegates to the state module so the circuit breaker has exactly one
+ * implementation. A second copy here is how the scheduler and the breaker would
+ * eventually disagree about whether an account is usable.
+ */
 function isUsableNow(state: ResourceState | undefined): boolean {
-  if (!state) return true
-
-  if (state.circuitOpenUntil) {
-    // An open circuit is a hard no while it lasts, and expires on its own.
-    if (state.circuitOpenUntil > Date.now()) return false
-    return state.health !== "unavailable"
-  }
-
-  if (state.health === "unavailable") return false
-  if (state.quota?.status === "exhausted") return false
-  return true
+  return ResourceState.usable(state)
 }
 
 /** Quota headroom in [0, 1]. Unknown quota scores neutrally, never as full. */
@@ -192,15 +188,18 @@ export function healthTerm(state?: ResourceState): number {
 export const LATENCY_BUDGET_MS = 60_000
 
 export function latencyTerm(state?: ResourceState): number {
-  // Derived from the rolling samples rather than read from a stored field, so
-  // there is exactly one place that decides what "average latency" means.
+  // The exponential moving average is preferred over the all-time mean: a
+  // resource that was slow an hour ago and is fast now should score as fast. The
+  // mean is the fallback so a migrated state file still contributes.
   const samples = state?.latencySamples ?? 0
-  const latency = samples > 0 ? (state?.totalLatencyMs ?? 0) / samples : undefined
+  const mean = samples > 0 ? (state?.totalLatencyMs ?? 0) / samples : undefined
+  const latency = state?.latencyEMA ?? mean
   if (typeof latency !== "number" || latency <= 0) return 0.5
   return Math.min(1, Math.max(0, 1 - latency / LATENCY_BUDGET_MS))
 }
 
 export function reliabilityTerm(state?: ResourceState): number {
+  if (typeof state?.successEMA === "number") return Math.min(1, Math.max(0, state.successEMA))
   const attempts = state?.attempts ?? 0
   if (attempts === 0) return 0.5
   return Math.min(1, Math.max(0, (state?.successes ?? 0) / attempts))

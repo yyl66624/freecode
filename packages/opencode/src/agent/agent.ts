@@ -49,6 +49,10 @@ export const Info = Schema.Struct({
     }),
   ),
   variant: Schema.optional(Schema.String),
+  // FreeCode: a declared capability floor, applied only when the agent's model is
+  // `auto`. It raises the tier the router chose and never lowers it, so an agent
+  // that knows it needs a strong model cannot be routed to a weak one.
+  tier: Schema.optional(Schema.Literals(["local", "fast", "standard", "strong", "max"])),
   prompt: Schema.optional(Schema.String),
   options: Schema.Record(Schema.String, Schema.Unknown),
   steps: Schema.optional(Schema.Finite),
@@ -279,6 +283,7 @@ const layer = Layer.effect(
               native: false,
             }
           if (value.model) item.model = Provider.parseModel(value.model)
+          if (value.tier) item.tier = value.tier
           item.variant = value.variant ?? item.variant
           item.prompt = value.prompt ?? item.prompt
           item.description = value.description ?? item.description

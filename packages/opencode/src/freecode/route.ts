@@ -5,6 +5,8 @@ import { RoutingRef } from "./context"
 import { ModelPool } from "./pool"
 import { Resources } from "./resources"
 import { Scheduler } from "./scheduler"
+import { Fallback } from "./fallback"
+import type { Tier } from "./resolver"
 import { ModelResolver } from "./resolver"
 import type { ProviderV2 } from "@opencode-ai/core/provider"
 import type { ModelV2 } from "@opencode-ai/core/model"
@@ -219,3 +221,46 @@ function isSentinel(providerID: ProviderV2.ID, modelID: ModelV2.ID) {
   if (providerID !== "freecode" && providerID !== "auto") return false
   return modelID === "auto" || modelID === ""
 }
+
+/**
+ * A replacement model for a turn whose provider call failed.
+ *
+ * Unlike `auto`, this does not re-classify the task: the task has not changed, and
+ * re-asking the classifier would cost a Laya pass to learn nothing. It reuses the
+ * tier the turn already committed to and asks the scheduler for the next eligible
+ * resource, with the just-failed one excluded.
+ *
+ * Returns `undefined` when no failover is warranted — the task failed rather than
+ * the provider, attempts are exhausted, or nothing else is eligible. The caller
+ * then keeps its own behaviour, which is what preserves the upstream retry and
+ * halt paths.
+ */
+export const replacementFor = Effect.fn("FreeCode.Route.replacement")(function* (
+  failed: ResolvedModel,
+  tier: Tier,
+  attempts: number,
+  registry: Registry,
+) {
+  const resolved = yield* resolvePool(registry).pipe(Effect.catch(() => Effect.succeed(new Map<string, ResolvedModel>())))
+  const plan = Fallback.plan({
+    failed,
+    tier,
+    // The stream's exit handler has already classified and recorded this failure,
+    // so read the verdict rather than re-classifying: a second classification
+    // would count the same failure twice against the account.
+    recorded: Fallback.recordedFor(`${failed.providerID}/${failed.id}`),
+    attempts,
+    pool: registry.pool,
+    model: (providerID, modelID) => resolved.get(`${providerID}/${modelID}`),
+  })
+
+  yield* Effect.logInfo("freecode fallback", {
+    failing: plan.failed,
+    class: plan.class,
+    escalate: plan.escalate,
+    next: plan.next ? `${plan.next.providerID}/${plan.next.id}` : undefined,
+    reason: plan.reason,
+  })
+
+  return plan.next
+})

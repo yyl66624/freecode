@@ -18,7 +18,11 @@ import type { SessionID } from "./schema"
 import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
-import type { Provider } from "@/provider/provider"
+import { Provider } from "@/provider/provider"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { Route as FreeCodeRoute } from "@/freecode/route"
+import { FreeCodeContext } from "@/freecode/context"
 import { Question } from "@/question"
 import { errorMessage } from "@/util/error"
 import { isRecord } from "@/util/record"
@@ -85,6 +89,7 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const snapshot = yield* Snapshot.Service
     const agents = yield* Agent.Service
+    const provider = yield* Provider.Service
     const llm = yield* LLM.Service
     const permission = yield* Permission.Service
     const plugin = yield* Plugin.Service
@@ -646,12 +651,18 @@ const layer = Layer.effect(
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
-        return yield* Effect.gen(function* () {
-          yield* Effect.gen(function* () {
+        // FreeCode seam. The turn's model is mutable across attempts so a
+        // provider failure can be retried on a *different* resource. Everything
+        // else about the request — messages, tools, system prompt — is reused
+        // untouched, because the task did not change; only the account did.
+        let model = streamInput.model
+
+        const attemptStream = () =>
+          Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.reasoningMap = {}
             yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(streamInput)
+            const stream = llm.stream({ ...streamInput, model })
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),
@@ -671,24 +682,75 @@ const layer = Layer.effect(
               (cause) => !Cause.hasInterruptsOnly(cause),
               (cause) => Effect.fail(Cause.squash(cause)),
             ),
-            Effect.retry(
-              SessionRetry.policy({
-                provider: input.model.providerID,
-                parse,
-                set: (info) => {
-                  return status.set(ctx.sessionID, {
-                    type: "retry",
-                    attempt: info.attempt,
-                    message: info.message,
-                    action: info.action,
-                    next: info.next,
-                  })
-                },
-              }),
-            ),
-            Effect.catch(halt),
-            Effect.ensuring(cleanup()),
           )
+
+        // Bounded failover. The upstream retry policy is kept and applied per
+        // attempt, so a transient blip is still absorbed without switching
+        // accounts; only a failure that survives it is treated as this
+        // resource's problem.
+        const runWithFallback = Effect.gen(function* () {
+          let attempts = 0
+          let lastError: unknown
+
+          while (true) {
+            attempts += 1
+            const exit = yield* attemptStream().pipe(
+              Effect.retry(
+                SessionRetry.policy({
+                  provider: model.providerID,
+                  parse,
+                  set: (info) =>
+                    status.set(ctx.sessionID, {
+                      type: "retry",
+                      attempt: info.attempt,
+                      message: info.message,
+                      action: info.action,
+                      next: info.next,
+                    }),
+                }),
+              ),
+              Effect.exit,
+            )
+
+            if (Exit.isSuccess(exit)) return
+            lastError = Cause.squash(exit.cause)
+
+            const cfg = yield* config.get()
+            const pool = cfg.freecode?.pool ?? {}
+            // The turn's agent supplies the declared tier floor; without it the
+            // replacement is chosen for the tier the router originally decided.
+            const declaring = yield* agents.get(ctx.assistantMessage.agent)
+            // The agent's declared tier is the floor the router honoured, so a
+            // replacement must not drop below it. Without a declaration the turn
+            // falls back to the tier the router would have chosen anyway.
+            const routing = yield* FreeCodeContext.RoutingRef
+            const replacement = yield* FreeCodeRoute.replacementFor(
+              { id: model.id, providerID: model.providerID },
+              declaring?.tier ?? routing?.tier ?? "standard",
+              attempts,
+              {
+                pool,
+                fallback: undefined,
+                get: (providerID, modelID) =>
+                  provider
+                    .getModel(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID))
+                    .pipe(Effect.catch(() => Effect.succeed(undefined))),
+              },
+            )
+
+            if (!replacement) return yield* Effect.fail(lastError)
+            // Branded ids are constructed here because the replacement comes back
+            // as plain strings, the same way `parseModel` builds them.
+            model = {
+              ...model,
+              id: ModelV2.ID.make(replacement.id),
+              providerID: ProviderV2.ID.make(replacement.providerID),
+            }
+          }
+        })
+
+        return yield* Effect.gen(function* () {
+          yield* runWithFallback.pipe(Effect.catch(halt), Effect.ensuring(cleanup()))
 
           if (ctx.needsCompaction) return "compact"
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"
@@ -726,6 +788,7 @@ export const node = LayerNode.make({
     Image.node,
     EventV2Bridge.node,
     Database.node,
+    Provider.node,
   ],
 })
 
