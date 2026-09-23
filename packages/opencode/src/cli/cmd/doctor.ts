@@ -26,9 +26,13 @@ export const DoctorCommand = effectCmd({
         describe: "emit machine-readable output",
         type: "boolean",
       })
-      .option("dir", { describe: "project directory to check", type: "string" }),
+      .option("dir", { describe: "project directory to check", type: "string" })
+      .option("no-network", {
+        describe: "skip the connectivity probe group; everything else still runs",
+        type: "boolean",
+      }),
   handler: Effect.fn("Cli.doctor")(function* (raw: unknown) {
-    const args = raw as { json?: boolean; dir?: string }
+    const args = raw as { json?: boolean; dir?: string; noNetwork?: boolean }
     const instance = yield* InstanceState.context
     const config = yield* Config.Service
     const cfg = yield* config.get()
@@ -43,6 +47,7 @@ export const DoctorCommand = effectCmd({
         workspace: instance.directory,
         config: cfg,
         providers: Object.keys(providers).sort(),
+        connectivity: !args.noNetwork,
       }),
     )
 

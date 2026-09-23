@@ -33,6 +33,9 @@ import { RoutesCommand } from "./cli/cmd/routes"
 import { TasksCommand } from "./cli/cmd/tasks"
 import { DoctorCommand } from "./cli/cmd/doctor"
 import { SetupCommand } from "./cli/cmd/setup"
+import { ProviderTestCommand } from "./cli/cmd/provider-test"
+import { ConfigValidateCommand } from "./cli/cmd/config-validate"
+import { AccountCommand } from "./cli/cmd/account-freecode"
 
 const args = hideBin(process.argv)
 
@@ -101,6 +104,9 @@ const cli = yargs(args)
   .command(TasksCommand)
   .command(DoctorCommand)
   .command(SetupCommand)
+  .command(ProviderTestCommand)
+  .command(ConfigValidateCommand)
+  .command(AccountCommand)
   .command(StatsCommand)
   .command(ExportCommand)
   .command(ImportCommand)

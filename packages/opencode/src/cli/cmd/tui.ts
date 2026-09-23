@@ -69,6 +69,27 @@ export function resolveThreadDirectory(project?: string, envPWD = process.env.PW
   return Filesystem.resolve(cwd)
 }
 
+async function coldStartNudge() {
+  if (!process.stderr.isTTY) return // no interactive reader to talk to
+  try {
+    const { Config } = await import("@/config/config")
+    const { Effect } = await import("effect")
+    const { AppRuntime } = await import("@/effect/app-runtime")
+    const cfg = await AppRuntime.runPromise(Config.Service.use((service) => service.getGlobal()))
+    const pool = cfg.freecode?.pool
+    const hasModels = Object.values(pool ?? {}).some((entries) => Array.isArray(entries) && entries.length > 0)
+    if (hasModels) return
+    UI.println(
+      UI.Style.TEXT_WARNING_BOLD + "!" + UI.Style.TEXT_NORMAL +
+        " No FreeCode resource pool configured yet. Routing will use the session default model",
+    )
+    UI.println("    " + UI.Style.TEXT_DIM + "freecode setup — add a provider and pool, or freecode account add <id> for credentials only" + UI.Style.TEXT_NORMAL)
+  } catch {
+    // A config-read failure here must never block the TUI from opening; the
+    // TUI's own config path reports it properly.
+  }
+}
+
 export const TuiThreadCommand = cmd({
   command: "$0 [project]",
   describe: "start the FreeCode TUI",
@@ -147,6 +168,14 @@ export const TuiThreadCommand = cmd({
       process.exitCode = 1
       return
     }
+
+    // Cold-start nudge, not a gate: a machine that has never configured a pool
+    // still starts FreeCode normally, it just hears once that routing has
+    // nothing to route on yet and which two commands fix that. Everything after
+    // this point is exactly the pre-FreeCode flow, so the TUI never waits on
+    // it and nothing new is written.
+    await coldStartNudge()
+
     const noReplay = args.replay === false || args.noReplay === true
 
     if (args.mini) {

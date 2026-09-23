@@ -11,6 +11,7 @@ import DiffViewer from "./system/diff-viewer"
 import Notifications from "./system/notifications"
 import PluginManager from "./system/plugins"
 import WhichKey from "./system/which-key"
+import Freecode from "./system/freecode"
 
 export type BuiltinTuiPlugin = Omit<TuiPluginModule, "id"> & {
   id: string
@@ -32,5 +33,9 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     PluginManager,
     WhichKey,
     DiffViewer,
+    // FreeCode's scheduler commands. Purely additive (registerLayer only),
+    // and a no-op registration when `freecode.commands.disable` is set in the
+    // config — the vanilla-mode kill switch, docs 01 §5.
+    Freecode,
   ]
 }

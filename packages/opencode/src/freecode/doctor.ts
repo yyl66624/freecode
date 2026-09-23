@@ -7,6 +7,8 @@ import { Global } from "@opencode-ai/core/global"
 import { bridgeDirectories } from "./router/client"
 import { Worktree } from "./worktree"
 import { ResourceState, load, promote } from "./state"
+import { ProviderTest } from "./provider-test"
+import { SchedulerState } from "./core/state-store"
 import type { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 
 /**
@@ -45,6 +47,12 @@ export interface Input {
   config?: ConfigV1.Info
   /** Names of configured provider ids, for the providers group. */
   providers?: string[]
+  /**
+   * When false, skip the network half of the check: the connectivity group
+   * reports nothing was checked rather than dialing into a network a caller
+   * asked to avoid.
+   */
+  connectivity?: boolean
 }
 
 export async function run(input: Input): Promise<Check[]> {
@@ -199,6 +207,95 @@ export async function run(input: Input): Promise<Check[]> {
     }
   }
 
+  // --- scheduler --------------------------------------------------------------
+
+  // The six-dimension core's own state file (`core/state-store.ts`),
+  // separate from `resources.json` above: that one is the failover layer's
+  // observation, this one is the scheduler's candidate states and decision
+  // log (docs/architecture/03-scheduler.md §8). Absent is `skip`, not
+  // `fail` — it just means nothing has routed yet, which is a machine that
+  // is fine, not broken.
+  const scheduler = SchedulerState.load()
+  const schedulerCandidates = Object.entries(scheduler.candidates)
+  const outsidePool = schedulerCandidates.filter(([, candidate]) => !stateInPool(candidate))
+  if (schedulerCandidates.length === 0) {
+    add({
+      group: "Scheduler",
+      name: "state",
+      status: "skip",
+      detail: "no `state.json` yet; written on the first routed task",
+    })
+  } else {
+    add({
+      group: "Scheduler",
+      name: "state",
+      status: "ok",
+      detail: `${schedulerCandidates.length} candidate(s) tracked, ${scheduler.decisions.length} decision(s) logged`,
+    })
+    for (const [id, candidate] of outsidePool) {
+      add({
+        group: "Scheduler",
+        name: id,
+        status: "warn",
+        detail: `outside the pool: ${candidate.health.state}${candidate.health.quotaResetAt ? " (quota window active)" : ""}`,
+      })
+    }
+  }
+
+  // --- connectivity -------------------------------------------------------------
+
+  // The actionable half of `doctor`: is each provider the pool actually
+  // routes to reachable *right now*? This is the check a SUSPENDED task's
+  // checklist (docs/architecture/adr/004-suspension-semantics.md) sends the
+  // user to, so it reports the same distinctions `freecode provider test`
+  // does — reachable-but-unauthenticated is not the same finding as down.
+  if (input.connectivity === false) {
+    add({
+      group: "Connectivity",
+      name: "probe",
+      status: "skip",
+      detail: "not run (--no-network)",
+    })
+  } else {
+    const poolProviders = new Set<string>()
+    for (const entries of Object.values(input.config?.freecode?.pool ?? {})) {
+      for (const entry of entries ?? []) poolProviders.add(entry.slice(0, entry.indexOf("/")))
+    }
+    if (poolProviders.size === 0) {
+      add({
+        group: "Connectivity",
+        name: "probe",
+        status: "skip",
+        detail: "no pool configured; nothing to probe",
+      })
+    } else {
+      for (const providerID of [...poolProviders].sort()) {
+        const provider = (input.config?.provider?.[providerID] ?? {}) as { options?: Record<string, unknown> }
+        const result = await ProviderTest.probe(providerID, provider.options, 5000)
+        const label = providerID === "ollama" ? "ollama (local model)" : providerID
+        if (result.ok) {
+          add({ group: "Connectivity", name: label, status: "ok", detail: result.detail })
+        } else if (result.status === 401 || result.status === 403) {
+          add({
+            group: "Connectivity",
+            name: label,
+            status: "warn",
+            detail: result.detail,
+            remedy: result.hint,
+          })
+        } else {
+          add({
+            group: "Connectivity",
+            name: label,
+            status: "fail",
+            detail: result.detail,
+            remedy: result.hint ?? `run \`freecode provider test ${providerID}\` for the same check in isolation`,
+          })
+        }
+      }
+    }
+  }
+
   // --- isolation --------------------------------------------------------------
 
   const isRepo = await Worktree.available(workspace)
@@ -249,6 +346,10 @@ export async function run(input: Input): Promise<Check[]> {
   })
 
   return checks
+}
+
+function stateInPool(candidate: { health: { state: string } }): boolean {
+  return candidate.health.state === "HEALTHY" || candidate.health.state === "DEGRADED"
 }
 
 function findBridge(): string | undefined {
