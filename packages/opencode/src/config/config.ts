@@ -15,6 +15,7 @@ import { InstallationLocal, InstallationVersion } from "@opencode-ai/core/instal
 import { existsSync } from "fs"
 import { Account } from "@/account/account"
 import { FreeCode } from "@/freecode/freecode"
+import { Trace } from "@/freecode/trace"
 import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@opencode-ai/core/v1/config/console-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -637,7 +638,11 @@ const layer = Layer.effect(
     )
 
     const get = Effect.fn("Config.get")(function* () {
-      return yield* InstanceState.use(state, (s) => s.config)
+      const config = yield* InstanceState.use(state, (s) => s.config)
+      // The config-file switch: when `freecode.trace` is true, turn the trace
+      // sink on for this process. Equivalent to setting FREECODE_TRACE=1.
+      Trace.enableFromConfig(config.freecode?.trace)
+      return config
     })
 
     const directories = Effect.fn("Config.directories")(function* () {

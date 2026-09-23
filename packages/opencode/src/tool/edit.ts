@@ -16,6 +16,8 @@ import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { containsPath } from "../project/instance-context"
+import { Trace } from "@/freecode/trace"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
 
@@ -80,11 +82,23 @@ export const EditTool = Tool.define(
           const filePath = path.isAbsolute(params.filePath)
             ? params.filePath
             : path.join(instance.directory, params.filePath)
+          Trace.toolResolve({
+            sessionID: ctx.sessionID,
+            messageID: ctx.messageID,
+            callID: ctx.callID,
+            tool: "edit",
+            inputPath: params.filePath,
+            cwd: instance.directory,
+            resolved: filePath,
+            external: !containsPath(filePath, instance),
+          })
           yield* assertExternalDirectoryEffect(ctx, filePath)
 
           let diff = ""
           let contentOld = ""
           let contentNew = ""
+          let permissionAsked = false
+          let writeError: string | undefined
           yield* lock(filePath).withPermits(1)(
             Effect.gen(function* () {
               if (params.oldString === "") {
@@ -108,6 +122,7 @@ export const EditTool = Tool.define(
                     diff,
                   },
                 })
+                permissionAsked = true
                 yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
                 if (yield* format.file(filePath)) {
                   contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
@@ -151,6 +166,7 @@ export const EditTool = Tool.define(
                   diff,
                 },
               })
+              permissionAsked = true
 
               yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
               if (yield* format.file(filePath)) {
@@ -169,7 +185,30 @@ export const EditTool = Tool.define(
                   normalizeLineEndings(contentNew),
                 ),
               )
-            }).pipe(Effect.orDie),
+            }).pipe(
+              Effect.tap(
+                Effect.sync(() => {
+                  Trace.toolOutcome({
+                    sessionID: ctx.sessionID,
+                    callID: ctx.callID,
+                    tool: "edit",
+                    outcome: "success",
+                  })
+                }),
+              ),
+              Effect.tapError((error) =>
+                Effect.sync(() => {
+                  Trace.toolOutcome({
+                    sessionID: ctx.sessionID,
+                    callID: ctx.callID,
+                    tool: "edit",
+                    outcome: permissionAsked ? "permission" : "error",
+                    error: String(error),
+                  })
+                }),
+              ),
+              Effect.orDie,
+            )
           )
 
           let additions = 0

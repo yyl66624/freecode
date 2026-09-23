@@ -18,6 +18,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { InstanceRef } from "@/effect/instance-ref"
 import { Isolation as FreeCodeIsolation } from "@/freecode/isolation"
 import { FreeCodeContext } from "@/freecode/context"
+import { Trace } from "@/freecode/trace"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -210,13 +211,21 @@ export const TaskTool = Tool.define(
         // `InstanceRef`, so providing a different instance redirects the whole
         // subagent — reads, edits, bash — into the worktree.
         const instance = yield* InstanceState.context
-        const isolated = yield* FreeCodeIsolation.prepare({
+        // Trace: the parent's InstanceRef is what the subagent's file tools
+        // resolve against when the subagent is NOT isolated. Recording it here
+        // — before the isolation decision — makes the trace able to tell
+        // "the subagent ran in the shared checkout because of the parent
+        // instance" from "the subagent ran in the worktree".
+        Trace.instance(instance.directory, instance.worktree, instance.project.id)
+        const isolation = yield* FreeCodeIsolation.prepare({
           repository: instance.worktree,
           sessionID: nextSession.id,
           agent: next.name,
           rules: next.permission,
           policy: cfg.freecode?.isolation,
           mode: next.workspaceMode,
+          model: { providerID: model.providerID, modelID: model.modelID },
+          parentSessionID: ctx.sessionID,
         })
 
         const prompt = ops.prompt({
@@ -244,14 +253,14 @@ export const TaskTool = Tool.define(
           })
 
         const result = yield* withRouting(
-          isolated
+          isolation.mode === "isolated"
             ? Effect.provideService(prompt, InstanceRef, {
                 ...instance,
-                directory: isolated.directory,
+                directory: isolation.directory,
                 // The worktree is the project for this subagent: reporting the
                 // original worktree would make `external_directory` permissions
                 // treat its own files as outside the project.
-                worktree: isolated.directory,
+                worktree: isolation.directory,
               })
             : prompt,
         )
@@ -260,12 +269,34 @@ export const TaskTool = Tool.define(
             "message" in result.info.error.data && typeof result.info.error.data.message === "string"
               ? result.info.error.data.message
               : result.info.error.name
-          return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${message}`))
+          const errorMessage = `Subagent failed (task_id: ${nextSession.id}): ${message}`
+          Trace.turnEnd({
+            sessionID: nextSession.id,
+            parentSessionID: ctx.sessionID,
+            agent: next.name,
+            outcome: "error",
+            error: message,
+          })
+          return yield* Effect.fail(new Error(errorMessage))
         }
         const failed = result.parts.findLast((item) => item.type === "tool" && item.state.status === "error")
         if (failed?.type === "tool" && failed.state.status === "error") {
-          return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${failed.state.error}`))
+          const errorMessage = `Subagent failed (task_id: ${nextSession.id}): ${failed.state.error}`
+          Trace.turnEnd({
+            sessionID: nextSession.id,
+            parentSessionID: ctx.sessionID,
+            agent: next.name,
+            outcome: "error",
+            error: failed.state.error,
+          })
+          return yield* Effect.fail(new Error(errorMessage))
         }
+        Trace.turnEnd({
+          sessionID: nextSession.id,
+          parentSessionID: ctx.sessionID,
+          agent: next.name,
+          outcome: "success",
+        })
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })
 

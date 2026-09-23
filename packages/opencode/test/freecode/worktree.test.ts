@@ -264,8 +264,8 @@ describe("isolation policy", () => {
     expect(Worktree.shouldIsolate({ mode: undefined, canWrite: false, policy: undefined })).toBe(false)
   })
 
-  test("prepare returns undefined rather than failing when isolation is not wanted", async () => {
-    const info = await Effect.runPromise(
+  test("prepare returns a shared Result rather than failing when isolation is not wanted", async () => {
+    const result = await Effect.runPromise(
       Isolation.prepare({
         repository: "/nonexistent",
         sessionID: "ses_skip",
@@ -274,7 +274,8 @@ describe("isolation policy", () => {
         policy: "auto",
       }),
     )
-    expect(info).toBeUndefined()
+    expect(result.mode).toBe("shared")
+    expect(result.directory).toBeUndefined()
   })
 
   test("prepare falls back to the shared checkout when the project is not a git repository", async () => {
@@ -284,7 +285,7 @@ describe("isolation policy", () => {
     rmSync(plain, { recursive: true, force: true })
     mkdirSync(plain, { recursive: true })
     try {
-      const info = await Effect.runPromise(
+      const result = await Effect.runPromise(
         Isolation.prepare({
           repository: plain,
           sessionID: "ses_nogit",
@@ -293,7 +294,7 @@ describe("isolation policy", () => {
           policy: "auto",
         }),
       )
-      expect(info).toBeUndefined()
+      expect(result.mode).toBe("fallback")
     } finally {
       rmSync(plain, { recursive: true, force: true })
     }
@@ -301,7 +302,7 @@ describe("isolation policy", () => {
 
   test("prepare creates a worktree for a writer", async () => {
     await withRepo("prepare", async (repository) => {
-      const info = await Effect.runPromise(
+      const result = await Effect.runPromise(
         Isolation.prepare({
           repository,
           sessionID: "ses_prepare",
@@ -310,9 +311,13 @@ describe("isolation policy", () => {
           policy: "auto",
         }),
       )
-      expect(info).toBeDefined()
-      expect(existsSync(info!.directory)).toBe(true)
-      await Worktree.discard(info!, { deleteBranch: true })
+      expect(result.mode).toBe("isolated")
+      expect(result.directory).toBeDefined()
+      expect(existsSync(result.directory!)).toBe(true)
+      await Worktree.discard(
+        { id: "ses_prepare", directory: result.directory!, branch: result.branch!, repository },
+        { deleteBranch: true },
+      )
     })
   })
 })

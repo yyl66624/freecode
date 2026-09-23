@@ -13,6 +13,8 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { containsPath } from "../project/instance-context"
+import { Trace } from "@/freecode/trace"
 import * as Bom from "@/util/bom"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -41,6 +43,16 @@ export const WriteTool = Tool.define(
           const filepath = path.isAbsolute(params.filePath)
             ? params.filePath
             : path.join(instance.directory, params.filePath)
+          Trace.toolResolve({
+            sessionID: ctx.sessionID,
+            messageID: ctx.messageID,
+            callID: ctx.callID,
+            tool: "write",
+            inputPath: params.filePath,
+            cwd: instance.directory,
+            resolved: filepath,
+            external: !containsPath(filepath, instance),
+          })
           yield* assertExternalDirectoryEffect(ctx, filepath)
 
           const exists = yield* fs.existsSafe(filepath)
@@ -59,6 +71,12 @@ export const WriteTool = Tool.define(
               filepath,
               diff,
             },
+          })
+          Trace.toolOutcome({
+            sessionID: ctx.sessionID,
+            callID: ctx.callID,
+            tool: "write",
+            outcome: "success",
           })
 
           yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))

@@ -6,6 +6,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./read.txt"
 import { InstanceState } from "@/effect/instance-state"
+import { Trace } from "@/freecode/trace"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
@@ -239,6 +240,15 @@ export const ReadTool = Tool.define<
         filepath = FSUtil.normalizePath(filepath)
       }
       const title = path.relative(instance.worktree, filepath)
+      Trace.toolResolve({
+        sessionID: ctx.sessionID,
+        messageID: ctx.messageID,
+        callID: ctx.callID,
+        tool: "read",
+        inputPath: params.filePath,
+        cwd: instance.directory,
+        resolved: filepath,
+      })
 
       const stat = yield* fs.stat(filepath).pipe(
         Effect.catchIf(

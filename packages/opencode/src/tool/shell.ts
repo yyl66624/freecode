@@ -5,6 +5,7 @@ import * as Tool from "./tool"
 import path from "path"
 import { containsPath, type InstanceContext } from "../project/instance-context"
 import { InstanceState } from "@/effect/instance-state"
+import { Trace } from "@/freecode/trace"
 import { lazy } from "@/util/lazy"
 import { Language, type Node } from "web-tree-sitter"
 
@@ -612,6 +613,16 @@ export const ShellTool = Tool.define(
               const cwd = params.workdir
                 ? yield* resolvePath(params.workdir, instanceCtx.directory, shell)
                 : instanceCtx.directory
+              Trace.toolResolve({
+                sessionID: ctx.sessionID,
+                messageID: ctx.messageID,
+                callID: ctx.callID,
+                tool: "shell",
+                inputPath: params.command,
+                cwd,
+                resolved: cwd,
+                external: !containsPath(cwd, instanceCtx),
+              })
               if (params.timeout !== undefined && params.timeout < 0) {
                 throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
               }

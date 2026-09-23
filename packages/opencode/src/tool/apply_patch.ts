@@ -8,6 +8,8 @@ import { Patch } from "../patch"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { trimDiff } from "./edit"
+import { containsPath } from "../project/instance-context"
+import { Trace } from "@/freecode/trace"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import DESCRIPTION from "./apply_patch.txt"
@@ -53,6 +55,23 @@ export const ApplyPatchTool = Tool.define(
       }
 
       const instance = yield* InstanceState.context
+
+      // Trace: record every file path this patch will touch, before any of
+      // the writes happen, so the trace shows what was attempted even when
+      // the patch is later rejected.
+      for (const hunk of hunks) {
+        const hunkPath = path.resolve(instance.directory, hunk.path)
+        Trace.toolResolve({
+          sessionID: ctx.sessionID,
+          messageID: ctx.messageID,
+          callID: ctx.callID,
+          tool: "apply_patch",
+          inputPath: hunk.path,
+          cwd: instance.directory,
+          resolved: hunkPath,
+          external: !containsPath(hunkPath, instance),
+        })
+      }
 
       // Validate file paths and check permissions
       const fileChanges: Array<{
@@ -247,6 +266,17 @@ export const ApplyPatchTool = Tool.define(
             yield* afs.remove(change.filePath)
             updates.push({ file: change.filePath, event: "unlink" })
             break
+        }
+
+        // Trace: record the outcome now that the write (or delete) has
+        // actually happened.
+        if (change.type !== "delete") {
+          Trace.toolOutcome({
+            sessionID: ctx.sessionID,
+            callID: ctx.callID,
+            tool: "apply_patch",
+            outcome: "success",
+          })
         }
 
         if (edited) {

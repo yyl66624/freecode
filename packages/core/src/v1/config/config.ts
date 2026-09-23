@@ -120,6 +120,10 @@ export const Info = Schema.Struct({
         description:
           "Whether subagents that can write get their own git worktree. 'auto' (default) isolates writers and shares readers, 'always' isolates every subagent, 'never' disables isolation.",
       }),
+      trace: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "Record the end-to-end trace of subagent isolation and file writes (InstanceRef -> session -> tool call -> resolved path -> outcome) to the trace file. Implied by the FREECODE_TRACE=1 environment variable, which also sets this at runtime; the config option exists so a run can be traced without an environment variable. Default off.",
+      }),
     }),
   ).annotate({ description: "FreeCode auto model routing" }),
   mcp: Schema.optional(
