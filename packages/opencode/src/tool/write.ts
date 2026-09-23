@@ -72,17 +72,17 @@ export const WriteTool = Tool.define(
               diff,
             },
           })
+          yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
+          if (yield* format.file(filepath)) {
+            yield* Bom.syncFile(fs, filepath, desiredBom)
+          }
+          // Trace: record success only after the bytes are actually on disk.
           Trace.toolOutcome({
             sessionID: ctx.sessionID,
             callID: ctx.callID,
             tool: "write",
             outcome: "success",
           })
-
-          yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
-          if (yield* format.file(filepath)) {
-            yield* Bom.syncFile(fs, filepath, desiredBom)
-          }
           yield* events.publish(FileSystem.Event.Edited, { file: filepath })
           yield* events.publish(Watcher.Event.Updated, {
             file: filepath,

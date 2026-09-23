@@ -268,17 +268,6 @@ export const ApplyPatchTool = Tool.define(
             break
         }
 
-        // Trace: record the outcome now that the write (or delete) has
-        // actually happened.
-        if (change.type !== "delete") {
-          Trace.toolOutcome({
-            sessionID: ctx.sessionID,
-            callID: ctx.callID,
-            tool: "apply_patch",
-            outcome: "success",
-          })
-        }
-
         if (edited) {
           if (yield* format.file(edited)) {
             yield* Bom.syncFile(afs, edited, change.bom)
@@ -290,6 +279,19 @@ export const ApplyPatchTool = Tool.define(
       // Publish file change events
       for (const update of updates) {
         yield* events.publish(Watcher.Event.Updated, update)
+      }
+
+      // Trace: record one outcome per non-delete file, after all writes
+      // have actually landed on disk.
+      for (const change of fileChanges) {
+        if (change.type !== "delete") {
+          Trace.toolOutcome({
+            sessionID: ctx.sessionID,
+            callID: ctx.callID,
+            tool: "apply_patch",
+            outcome: "success",
+          })
+        }
       }
 
       // Notify LSP of file changes and collect diagnostics
