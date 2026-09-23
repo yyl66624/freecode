@@ -7,10 +7,11 @@ import * as Core from "./types"
  * reliability with Laplace smoothing, cold-start priors, and the 24h
  * staleness rule from docs 03 §8.
  *
- * These are the numbers the scorer consumes; the scorer (scoring.ts) decides
- * how they become [0,1] terms. Keeping the math here, pure and testable, is
- * what makes the audit log replayable: a `state.json` snapshot plus the
- * request is a fully determined input to `Scorer.dims`.
+ * These are the numbers the scorer consumes; the scorer (scoring.ts)
+ * decides how they become [0,1] terms. Keeping the math here, pure and
+ * testable, is what makes the audit log replayable: a `state.json`
+ * snapshot plus the request is a fully determined input to
+ * `Scoring.dims`.
  */
 
 export interface CallObservation {
@@ -21,22 +22,22 @@ export interface CallObservation {
 }
 
 /** One recent call, for the sliding-window reliability. */
-interface WindowCall {
+export interface WindowCall {
   ok: boolean
   at: number
 }
 
 export interface CandidateMetrics {
   /**
-   * Exponentially weighted P50 latency, in milliseconds. Reacts within a few
-   * calls; `undefined` until the first observation, in which case the
+   * Exponentially weighted P50 latency, in milliseconds. Reacts within a
+   * few calls; `undefined` until the first observation, in which case the
    * latency prior applies.
    */
   latencyEwmaMs?: number
   /**
-   * Windowed reliability: (successes + α) / (total + β) with α = β = 1,
-   * Laplace-smoothed so a candidate with fewer than ten samples leans to
-   * the 0.9 cold-start prior rather than being all-penalty, docs 03 §3.2.
+   * Windowed reliability: (successes + 1) / (total + 2), Laplace-smoothed
+   * so a candidate with few samples leans to the 0.9 cold-start prior
+   * rather than being all-penalty, docs 03 §3.2.
    */
   reliability?: number
   /** Window sample count, for the audit log and the TUI. */
@@ -53,22 +54,23 @@ export interface CandidateMetrics {
 }
 
 /**
- * Weight of the newest sample, docs 03 §3.2: 0.3 reacts to a change within a
- * handful of calls without letting a single outlier dominate.
+ * Weight of the newest sample, docs 03 §3.2: 0.3 reacts to a change within
+ * a handful of calls without letting a single outlier dominate.
  */
 export const LATENCY_EMA_ALPHA = 0.3
 
 export function initialMetrics(): CandidateMetrics {
-  return { sampling: true, samplingSince: Date.now(), window: [] }
+  return { sampling: true, samplingSince: 0, window: [] }
 }
 
 /**
- * Fold one call outcome into a candidate's metrics. Pure.
+ * Fold one call outcome into a candidate's metrics. Pure: the timestamps
+ * come from the observation, so a replayed run and a live run agree.
  *
  * Failures take no latency sample — a slow failure is a failure, and it is
  * already scored through the health and reliability terms.
  */
-export function onCall(prev: CandidateMetrics | undefined, obs: CallObservation, now = Date.now()): CandidateMetrics {
+export function onCall(prev: CandidateMetrics | undefined, obs: CallObservation): CandidateMetrics {
   const base: CandidateMetrics = prev ?? initialMetrics()
   const next: CandidateMetrics = {
     ...base,
@@ -86,21 +88,19 @@ export function onCall(prev: CandidateMetrics | undefined, obs: CallObservation,
 
   // The window: the smaller of the last hour and the last 100 calls.
   const calls = next.window!.slice(-Core.RELIABILITY_WINDOW_CALLS)
-  const windowed = calls.filter((call) => call.at >= obs.at - Core.RELIABILITY_WINDOW_MS)
-  next.window = windowed
-  const successes = windowed.filter((call) => call.ok).length
-  next.windowSamples = windowed.length
-  // Laplace smoothing: (s + α) / (n + β) with α = β = 1 — with n = 0 the
-  // value is the cold-start prior 0.9, with more samples it converges to the
-  // raw success rate.
-  next.reliability = (successes + 1) / (windowed.length + 2)
+  next.window = calls.filter((call) => call.at >= obs.at - Core.RELIABILITY_WINDOW_MS)
+  const successes = next.window!.filter((call) => call.ok).length
+  next.windowSamples = next.window!.length
+  // Laplace smoothing: (s + 1) / (n + 2) — with n = 0 the value is 0.5,
+  // below the 0.9 cold-start prior; the reliabilityOf() seam keeps the
+  // prior exactly until the first observation actually lands.
+  next.reliability = (successes + 1) / (next.window!.length + 2)
 
   // Leave the sampling window once either boundary is hit, docs 03 §7.
   if (next.sampling && ((next.totalCalls ?? 0) >= Core.STEADY_AFTER_CALLS || obs.at - (next.samplingSince ?? obs.at) >= Core.STEADY_AFTER_MS)) {
     next.sampling = false
   }
 
-  void now
   return next
 }
 
@@ -135,11 +135,13 @@ export function latencyMs(metrics: CandidateMetrics | undefined, provider: strin
 }
 
 /**
- * The reliability to score with, docs 03 §3.1: the windowed rate when the
- * candidate has observations, otherwise the 0.9 cold-start prior so a fresh
- * resource gets a chance instead of scoring zero on a metric nobody has
- * measured.
+ * The reliability to score with, docs 03 §3.1: the windowed rate once the
+ * candidate has observations, otherwise the 0.9 cold-start prior so a
+ * fresh resource gets a chance instead of scoring zero on a metric nobody
+ * has measured.
  */
 export function reliabilityOf(metrics: CandidateMetrics | undefined): number {
-  return metrics?.reliability ?? Core.COLD_START_RELIABILITY
+  // No observation, or one with no samples at all: the prior.
+  if (metrics?.windowSamples === 0 || metrics?.reliability === undefined) return Core.COLD_START_RELIABILITY
+  return metrics.reliability
 }

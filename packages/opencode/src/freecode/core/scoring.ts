@@ -1,8 +1,8 @@
 export * as Scoring from "./scoring"
 
 import * as Core from "./types"
-import { IN_POOL, onQuotaReset, type CandidateState, type CandidateHealth } from "./state-machine"
-import { Metrics, latencyMs, reliabilityOf } from "./metrics"
+import { IN_POOL, type CandidateState, type CandidateHealth } from "./state-machine"
+import { latencyMs, reliabilityOf, type CandidateMetrics } from "./metrics"
 
 /**
  * The six-dimension scorer, docs 03 §3.
@@ -25,7 +25,7 @@ import { Metrics, latencyMs, reliabilityOf } from "./metrics"
 export interface Candidate {
   spec: Core.CandidateSpec
   health: CandidateHealth
-  metrics: Metrics.CandidateMetrics
+  metrics: CandidateMetrics
   /**
    * Remaining quota fraction in [0, 1], when the account declares a budget
    * and the store has tracked usage. Absent when the budget is unknown —
@@ -83,9 +83,7 @@ export function hardFilter(c: Candidate, req: Core.ResolveRequest, relaxed: bool
   if (!tierOk) return false
   if (relaxed) return true // the relaxed path drops the "long-context"-style features
   return (req.requiredFeatures ?? []).every((f) => c.spec.model.capabilities.includes(f))
-}
-
-export interface Terms {
+}export interface Terms {
   capability: number
   quota: number
   health: number
@@ -293,18 +291,3 @@ function jitterValue(seed: number, a: string, b: string): number {
   return h / 0x1_0000_0000
 }
 
-/**
- * The quota-window reset check, docs 03 §5: a scheduled task calls this
- * and candidates in EXHAUSTED whose window has rolled are re-admitted via
- * the probe. Pure: returns a new candidate list with their state advanced.
- */
-export function admitResetWindows(candidates: readonly Candidate[], now: number): Candidate[] {
-  return candidates.map((c) => {
-    if (c.health.state !== "EXHAUSTED") return c
-    const reset = c.health.quotaResetAt ?? (c.spec.account.quota ? Core.quotaWindowReset(c.spec.account.quota, now) : undefined)
-    if (reset !== undefined && reset <= now) {
-      return { ...c, health: onQuotaReset(c.health, now) }
-    }
-    return c
-  })
-}
