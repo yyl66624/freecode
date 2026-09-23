@@ -815,6 +815,24 @@ something clever is strictly worse than stopping.
    never matched and `tasks list` reported nothing. Paths are canonicalised on the
    way in and out.
 
+## M0 release gate and isolation contract (P0-3)
+
+Contract and gate document: [`docs/M0-RELEASE-GATE.md`](docs/M0-RELEASE-GATE.md).
+It fixes four things that the P0 freeze period needs in writing:
+
+1. **The isolation contract.** What `isolated` / `shared` / `fallback` each
+   guarantee, which behaviours are contractual and which are degradation, and an
+   assertion list (A1–A5, B1–B4, C1–C2) that maps one-to-one onto the P0-1
+   trace fields and the P0-2 verdict labels. Any `WRONG_CWD` or `ERROR` verdict
+   fails gate G2.
+2. **The M0 gate list.** G1–G9, each verifiable by a command and expected
+   output. No gate may pass on a feeling.
+3. **The freeze rules.** What the P0 window allows and forbids, and how to
+   request an exception.
+4. **The single-entry model-resolution check.** Confirmed: `FreeCodeRoute.auto`
+   is called from exactly one place (`Provider.getModel`), and gate G8 re-runs
+   that check with a grep recipe at every gate pass.
+
 ## Not started
 
 Laya fine-tuning on the routing data FreeCode now produces (v0.4), and a wider
