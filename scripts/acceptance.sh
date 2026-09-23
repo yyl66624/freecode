@@ -169,12 +169,17 @@ else
 
     head_ "A real task through model:auto"
 
+    # Enable the FreeCode trace so the verdict runner (P0-2) can read the JSONL
+    # record later. The trace file lands at $XDG_DATA_HOME/freecode/trace/<pid>.jsonl.
+    export FREECODE_TRACE=1
+
     (
       cd "$PREFIX/project"
       freecode run --print-logs --log-level INFO \
         "Use the task tool with subagent_type=coder to add a module docstring to geom.py." \
         >"$PREFIX/run.log" 2>&1
     )
+    unset FREECODE_TRACE
 
     if grep -q "freecode route" "$PREFIX/run.log"; then
       ok "routing ran: $(grep -m1 -o 'tier=[a-z]*' "$PREFIX/run.log" | head -1)"
@@ -243,6 +248,32 @@ else
       fi
     else
       skip "isolation checks (the subagent did not get a worktree)"
+    fi
+
+    # --- isolation verdict (P0-2) ----------------------------------------------
+    #
+    # The verdict runner reads the trace JSONL that the trace sink just wrote,
+    # and prints OK / WRONG_CWD / NO_WRITE / ERROR.  This is the P0-2
+    # deliverable: "只看脚本输出即可区分模型没调用写工具 vs 隔离上下文丢失".
+    TRACE_FILE="$(find "$XDG_DATA_HOME/freecode/trace" -name '*.jsonl' 2>/dev/null | head -1)"
+    if [[ -n "$TRACE_FILE" ]]; then
+      printf '  isolation verdict trace: %s\n' "$TRACE_FILE" >&2
+      VERDICT_OUT="$(bash "$HERE/scripts/isolation-verdict.sh" "$TRACE_FILE" any 2>/dev/null)"
+      VERDICT_LABELS="$(echo "$VERDICT_OUT" | /usr/bin/python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    print(" ".join(v["label"] for v in data["verdicts"]))
+except Exception:
+    print("UNKNOWN")
+' 2>/dev/null)"
+      if [[ "$VERDICT_LABELS" == "OK" ]]; then
+        ok "isolation verdict: OK (all writes landed in the worktree)"
+      else
+        no "isolation verdict: ${VERDICT_LABELS:-UNKNOWN} (expected OK)"
+      fi
+    else
+      skip "isolation verdict runner (no trace file found)"
     fi
 
     # --- resumption -----------------------------------------------------------

@@ -567,6 +567,26 @@ Two test defects found and fixed while investigating:
    rebuild. That is the same trap recorded above, and the script now documents that
    `bun run package` must run first.
 
+### Isolation verdict (P0-2)
+
+`bash scripts/isolation-verdict.sh <trace.jsonl>` reads a recorded trace file and
+prints a verdict for every subagent session in it, with the label and the full
+evidence (session record, write resolves, outcomes, turn end, and a filesystem
+cross-check for paths that still exist on this machine):
+
+- `OK` — every write landed in the subagent's own worktree
+- `WRONG_CWD` — a write landed outside the subagent's worktree (isolation lost)
+- `NO_WRITE` — the subagent never called a write tool (model behaviour)
+- `ERROR` — the turn failed, a write errored, or the subagent was not isolated
+
+The verdict is a pure function of the trace, so it is deterministic and can be
+driven by recorded samples without a provider or a repository. The judgment logic
+is tested in `test/freecode/verdict.test.ts` against the P0-1 recorded samples and
+synthetic traces.
+
+`acceptance.sh` now runs the real task with `FREECODE_TRACE=1` and calls the verdict
+runner after the isolation check, printing the verdict label for the run.
+
 ## Regression check
 
 `bun test test/config test/provider test/freecode` from `packages/opencode`:

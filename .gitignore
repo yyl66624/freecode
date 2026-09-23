@@ -42,3 +42,4 @@ dist/
 
 # FreeCode: release archives
 dist/release/
+packages/opencode/verdict-decide.mjs

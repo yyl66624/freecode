@@ -1,0 +1,216 @@
+export * as Verdict from "./verdict"
+
+import { Trace } from "./trace"
+import { contains as pathContains } from "@/util/filesystem"
+
+/**
+ * The acceptance verdict for one isolated-subagent run.
+ *
+ * Answers the question P0-2 exists for: when an acceptance check fails, is it
+ * "the model never wrote" (a model behaviour) or "the model wrote, but to the
+ * wrong place" (an isolation defect)? The two have different owners and
+ * different fixes, so the acceptance run must say which one happened instead of
+ * a bare "isolation check failed".
+ *
+ * The verdict is derived from the trace record (P0-1), not from the log lines
+ * or the filesystem:
+ *
+ *   - `NO_WRITE`    no write tool was attempted by the subagent.
+ *   - `WRONG_CWD`   a write was attempted, but the tool resolved it to a path
+ *                   outside the subagent's worktree - it landed in the shared
+ *                   checkout.
+ *   - `OK`          every write attempt resolved inside the subagent's own
+ *                   worktree and the turn ended successfully.
+ *   - `ERROR`       the turn ended in an error, or a tool call failed.
+ *
+ * The verdict is a function of the trace events only, so it can be driven by
+ * recorded traces in tests without a provider and without a repository.
+ */
+
+export type Label = "OK" | "WRONG_CWD" | "NO_WRITE" | "ERROR"
+
+export interface Evidence {
+  /** The events that the verdict is built from, in trace order. */
+  events: Trace.Event[]
+  /** The subagent session's isolation record: mode, worktree, reason. */
+  session?: Extract<Trace.Event, { kind: "session" }>
+  /** Every write-tool resolution in the run, with the path each one took. */
+  resolves: Extract<Trace.Event, { kind: "tool.resolve" }>[]
+  /** Every write-tool outcome in the run. */
+  outcomes: Extract<Trace.Event, { kind: "tool.outcome" }>[]
+  /** The turn's end record, when one exists. */
+  turn?: Extract<Trace.Event, { kind: "turn.end" }>
+  /** The paths the write tool resolved to, from the trace. */
+  resolved: string[]
+  /** The paths a write would have resolved to if the model had written. */
+  wouldResolve: string[]
+  /** The paths the trace shows were actually written, when known. */
+  written: string[]
+  /** The paths that landed in the shared checkout, i.e. wrong. */
+  wrong: string[]
+  /** The paths that landed in the subagent's own worktree, i.e. right. */
+  right: string[]
+}
+
+export interface Result {
+  label: Label
+  /** One line, for the acceptance log: the label and the reason, human-readable. */
+  summary: string
+  /** The full evidence, for the "why" that ships with every verdict. */
+  evidence: Evidence
+  /**
+   * Whether the subagent was isolated at all. When the session record is
+   * missing, the verdict degrades to `ERROR` with this set.
+   */
+  isolated: boolean
+}
+
+/**
+ * The tools that can put bytes on disk. `apply_patch` counts even when its
+ * hunks are rejected later: the attempt is what the subagent decided to do,
+ * and a rejected patch is still a write attempt at that path.
+ */
+const WRITE_TOOLS = new Set(["write", "edit", "apply_patch"])
+
+export function isWriteTool(tool: string): boolean {
+  return WRITE_TOOLS.has(tool)
+}
+
+/**
+ * Decide the verdict for one subagent session from its trace events.
+ *
+ * `events` should be the trace lines that mention the session (as
+ * `Trace.read(sessionID)` returns), not the whole file: joining by session id
+ * is what keeps a parent's own tool calls from skewing the verdict.
+ */
+export function decide(events: Trace.Event[]): Result {
+  const session = events.find((event): event is Extract<Trace.Event, { kind: "session" }> =>
+    event.kind === "session",
+  ) as Extract<Trace.Event, { kind: "session" }> | undefined
+  const isolates: Extract<Trace.Event, { kind: "tool.resolve" }>[] = []
+  const outcomes: Extract<Trace.Event, { kind: "tool.outcome" }>[] = []
+  for (const event of events) {
+    if (event.kind === "tool.resolve" && isWriteTool(String(event["tool"]))) {
+      isolates.push(event as Extract<Trace.Event, { kind: "tool.resolve" }>)
+    }
+    if (event.kind === "tool.outcome" && isWriteTool(String(event["tool"]))) {
+      outcomes.push(event as Extract<Trace.Event, { kind: "tool.outcome" }>)
+    }
+  }
+  const turn = events.find(
+    (event): event is Extract<Trace.Event, { kind: "turn.end" }> => event.kind === "turn.end",
+  ) as Extract<Trace.Event, { kind: "turn.end" }> | undefined
+
+  // The subagent's own worktree, straight out of the trace record. The trace
+  // is the single source of truth: the verdict says where a write landed
+  // relative to where it *should* have landed, and both of those come from
+  // the same recording. A filesystem cross-check (does the file actually
+  // exist there?) is the runner's job, not the verdict's.
+  const worktree = session?.["worktree"] as string | undefined
+
+  const resolved = isolates.map((event) => String(event["resolved"]))
+  const written: string[] = []
+  const wrong: string[] = []
+  const right: string[] = []
+  for (const outcome of outcomes) {
+    const callId = outcome["callID"]
+    const source =
+      callId !== undefined
+        ? isolates.find((event) => event["callID"] === callId)
+        : isolates[isolates.length - 1]
+    if (!source) continue
+    if (outcome["outcome"] !== "success") continue
+    const target = String(source["resolved"])
+    written.push(target)
+    if (worktree && containsPath(target, worktree)) {
+      right.push(target)
+    } else {
+      wrong.push(target)
+    }
+  }
+  // What the model would have resolved its paths to, had it written them.
+  const wouldResolve = resolved.filter((path) => !(worktree ? containsPath(path, worktree) : false))
+
+  const evidence: Evidence = {
+    events: [...events],
+    session,
+    resolves: isolates,
+    outcomes,
+    turn,
+    resolved,
+    wouldResolve,
+    written,
+    wrong,
+    right,
+  }
+
+  // The isolation record is the reference for every other verdict: without it
+  // there is no "where the write should have gone", so the run is a trace
+  // problem, not an isolation problem.
+  if (!session || session["mode"] !== "isolated") {
+    const reason = session ? `isolation mode was '${session["mode"]}'${session["reason"] ? ` (${session["reason"]})` : ""}` : "no isolation record in the trace"
+    return finish("ERROR", `no write was expected (${reason})`, evidence)
+  }
+
+  // Turn failed: the failure is the story, and it is not a verdict about where
+  // a write landed.
+  if (turn && turn["outcome"] === "error") {
+    return finish(
+      "ERROR",
+      `turn failed${turn["error"] ? `: ${String(turn["error"])}` : ""}`,
+      evidence,
+    )
+  }
+
+  // A tool call that errored. Same: the error is the story.
+  const failed = outcomes.filter((event) => event["outcome"] === "error")
+  if (failed.length > 0) {
+    return finish(
+      "ERROR",
+      `${failed.length} write tool call(s) failed: ${failed
+        .map((event) => String(event["tool"]))
+        .join(", ")}${failed[0]["error"] ? ` (${String(failed[0]["error"])})` : ""}`,
+      evidence,
+    )
+  }
+
+  // No write tool was ever attempted. This is "the model did not call a write
+  // tool" - phenomenon B - and it must not be read as an isolation failure.
+  if (isolates.length === 0) {
+    return finish("NO_WRITE", "no write tool call was made by the subagent", evidence)
+  }
+
+  // Write tool calls exist but none succeeded (e.g. all were denied by
+  // permission). The model wanted to write; the write never reached disk.
+  if (written.length === 0) {
+    return finish(
+      "NO_WRITE",
+      `${isolates.length} write tool call(s) made, but none reached disk (all denied or not completed)`,
+      evidence,
+    )
+  }
+
+  // At least one write reached disk. Where did it land?
+  if (wrong.length > 0) {
+    return finish(
+      "WRONG_CWD",
+      `${wrong.length} write(s) landed outside the subagent's worktree: ${wrong.join(", ")}`,
+      evidence,
+    )
+  }
+
+  return finish("OK", `${written.length} write(s) landed in the subagent's worktree: ${right.join(", ")}`, evidence)
+}
+
+function finish(label: Label, summary: string, evidence: Evidence): Result {
+  const isolated = evidence.session?.["mode"] === "isolated"
+  return { label, summary, evidence, isolated }
+}
+
+function containsPath(target: string, directory: string): boolean {
+  // Mirror `@/project/instance-context`'s boundary rule, using the same
+  // helper the file tools use, so the verdict and the tools disagree on
+  // nothing: a path is inside when it is contained by the directory.
+  if (!target || !directory) return false
+  return pathContains(directory, target)
+}
