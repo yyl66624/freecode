@@ -53,7 +53,7 @@ verdict 标签来自 `packages/opencode/src/freecode/verdict.ts`（P0-2）。
 | --- | --- | --- | --- |
 | B1 | `mode=isolated` 时，每次写工具的 `resolved` 路径必须位于 `session.worktree` 之内（`cwd` 即 worktree 目录） | `resolved`, `cwd` vs `session.worktree` | 违反 → verdict `WRONG_CWD`（现象 A：隔离上下文丢失） |
 | B2 | `mode=shared` 或 `fallback` 时，写路径落在共享检出具 `session.directory`（策略/降级，契约内） | `resolved` vs `directory` | 落在两者之外且 `external=true` → 需外部权限放行，属用户可见行为 |
-| B3 | `write` 与 `apply_patch` 的 `tool.resolve` 带 `callID`，必须有配对的 `tool.outcome`（同 `callID`）；**`edit` 工具当前 resolve 无 `callID` 传参**（edit.ts:85 缺 `callID` 字段），outcome 记录在 edit.ts:191/201 同样缺 `callID`，verdict.ts:120 以「最后一条 resolve」兜底配对——这是**实现妥协**而非契约保证，P0-4 须补 callID 并移除兜底。`shell.ts` 读类工具的 `tool.resolve`（shell.ts:616）也进 trace，但 verdict 的 `WRITE_TOOLS` 集合（write/edit/apply_patch）不含 shell，读事件不参与 verdict 判定。**M0 核验项**：`isolation-verdict.sh` 输出中若出现「兜底配对」（resolve 无 callID，outcome 无 callID，二者按最后一条 resolve 关联）须打标记，避免 P0-4 修复后把兜底误读为正确配对。 | `callID`, `outcome` | 写工具（write/apply_patch）缺失 → verdict `ERROR`；edit 兜底配对为已知限制（P0-4 关闭） |
+| B3 | `write` / `edit` / `apply_patch` 的 `tool.resolve` 均带 `callID`（write.ts:46、edit.ts:85、apply_patch.ts:64），必须有配对的 `tool.outcome`（同 `callID`），outcome ∈ {`success`, `permission`, `error`}（write.ts:80、edit.ts:191/201、apply_patch.ts:288）。**`shell.ts` 读类工具的 `tool.resolve`（shell.ts:616）也进 trace，且带 `callID`，但 verdict 的 `WRITE_TOOLS` 集合（write/edit/apply_patch）不含 shell，故 shell 读事件不参与 verdict 判定。**M0 核验项**：`verdict.ts:120` 的 `isolates[isolates.length-1]` 兜底逻辑是 outcome 无 callID 时的回退路径，正常写工具均已传 callID，此路径在正常写工具中不应触发；P0-4 修复后须验证该兜底路径不再被写工具命中。 | `callID`, `outcome` | 写工具 resolve/outcome 无 callID 配对 → 兜底配对（已知限制，P0-4 核实）；shell 读事件不参与判定 |
 | B4 | 以下任一情形 → `NO_WRITE`，责任方是模型/prompt 或权限系统，不是隔离代码：
 （i）subagent 未调用任何写工具（`isolates.length === 0`）；
 （ii）写工具 resolve 存在但所有 outcome 均非 success（`written.length === 0`，例如被 permission 拒绝或未完成）；
@@ -216,14 +216,8 @@ verdict 标签（OK / WRONG_CWD / NO_WRITE / ERROR）由 `verdict.ts` 的 `decid
 以下两条是 trace 层面的**已知缺口**，记录在此以避免 P0-4 修复隔离时把它们误读为
 写证据或漏判：
 
-1. **`edit.ts` 无 callID**：`edit` 工具的 `tool.resolve`（edit.ts:85）与
-   `tool.outcome`（edit.ts:191/201）均未传 `callID`，verdict.ts:120 以「最后一条
-   resolve」兜底配对。`write`（write.ts:46/80）与 `apply_patch`（apply_patch.ts:64/288）
-   均带 callID，配对正确。P0-4 须补 edit 的 callID 并移除兜底逻辑。
-2. **`shell.ts` 读事件进 trace**：`shell.ts:616` 的 `Trace.toolResolve` 记录的是 shell
-   读类操作（`resolved` 为 shell 工作目录，非文件写目标）。verdict 的 `WRITE_TOOLS`
-   集合（write/edit/apply_patch）不含 shell，故读事件不参与 verdict 判定。P0-4 修隔离
-   时不应把 shell 读事件误当作写证据。
+1. **`verdict.ts` 兜底路径**：`verdict.ts:120` 的 `isolates[isolates.length-1]` 是 outcome 无 callID 时的回退配对逻辑。当前所有写工具（write.ts:46、edit.ts:85、apply_patch.ts:64）均已传 `callID`，正常路径不触发此兜底。P0-4 须验证：修复后该兜底路径仍不被写工具命中，避免把兜底误读为正确配对。
+2. **`shell.ts` 读事件进 trace**：`shell.ts:616` 的 `Trace.toolResolve` 记录的是 shell 读类操作（`resolved` 为 shell 工作目录，非文件写目标）。verdict 的 `WRITE_TOOLS` 集合（write/edit/apply_patch）不含 shell，故读事件不参与 verdict 判定。P0-4 修隔离时不应把 shell 读事件误当作写证据。
 
 ---
 
