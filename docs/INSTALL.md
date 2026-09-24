@@ -15,10 +15,15 @@
 | git ≥ 2.30 | 隔离（worktree）与任务合并 | `git --version` |
 | curl + tar | 安装脚本 | `curl --version` |
 | bash | 安装脚本 | `bash --version` |
-| bun ≥ 1.4 | 仅源码安装 / 开发需要 | `bun --version` |
+| bun ≥ 1.4 | 仅源码安装 / 开发需要（本文输出在 bun 1.4.2 构建机上实测） | `bun --version` |
 | Python ≥ 3.10 | 可选，Laya 加速层 | `python3 --version` |
 
 不装 Python 也能用：FreeCode 退化为纯规则路由（见 doctor 输出的说明）。
+
+> 已知环境行为：`routes` / `doctor` 的候选池总是包含一组内置演示账号
+> （`broken/deepseek-chat` 与 `deepseek/deepseek-flash`、`deepseek/deepseek-v4-pro`），
+> 它们来自二进制内置 catalog，不随你的配置消失，也无需为其配 key——
+> 它们存在的目的是让六维调度行在干净机器上也有可看的样本。
 
 ---
 
@@ -112,8 +117,12 @@ FREECODE_VERSION=0.4.0 ./scripts/install.sh --from-release
 以 DeepSeek 为例（其他厂商同构，换 `--provider` 与 key 文件）：
 
 ```bash
+# 脚本（非交互）路径的 setup 不会带默认 baseURL（模板表里的端点只是文档说明），
+# 显式给出 --base-url，否则 doctor 会报 "no base URL configured"
 # key 写入 ~/.freecode/secrets.env（mode 600），配置里只出现 {file:...} 引用
-freecode setup --provider deepseek --api-key '<你的 DEEPSEEK_KEY>' --model deepseek-chat
+freecode setup --provider deepseek \
+  --base-url https://api.deepseek.com/v1 \
+  --api-key '<你的 DEEPSEEK_KEY>' --model deepseek-chat
 
 # 验证端点可达（不发 LLM 请求）
 freecode provider test deepseek
@@ -121,6 +130,16 @@ freecode provider test deepseek
 # 启动 TUI（零配置首跑路径：pool 有 model、key 可达即可）
 cd 你的项目
 freecode
+```
+
+Ollama 本地路径（`--provider ollama` 模板无默认 model，`--model` 必填，
+否则 setup 报 `at least one model id is required` 且不写配置；无需 key）：
+
+```bash
+ollama pull qwen2.5-coder:14b
+freecode setup --provider ollama \
+  --base-url http://127.0.0.1:11434/v1 --model qwen2.5-coder:14b --yes
+freecode provider test ollama
 ```
 
 TUI 里发一个任务（Head Agent 自动按 tier 路由）：
@@ -135,18 +154,29 @@ TUI 里发一个任务（Head Agent 自动按 tier 路由）：
 freecode routes why        # 最近一次路由的完整解释
 ```
 
-实跑输出（`934475c`，pool 已配 deepseek）：
+实跑输出（`0cdc7ef` 构建，干净安装后跑 §2 的 DeepSeek 流程；`routes` 同时列出内置演示账号，见 §0 说明）：
 
 ```
 $ freecode routes
 Resources
-  deepseek/deepseek-chat
+  broken/deepseek-chat
+    account default   tiers standard strong max   cost 1.00   health unseen
+  deepseek/deepseek-flash
+    account default   tiers local fast   cost 1.20   health unseen
+  deepseek/deepseek-v4-pro
+    account default   tiers standard strong max   cost 1.74   health unseen
+  deepseek/deepseek-chat          ← 你刚 setup 的账号
     account default   tiers standard strong max   cost 1.00   health unseen
 
 Current choice per tier
-  local     deepseek/deepseek-flash score=0.629 (capability=0.70 quota=0.50 health=0.75 latency=0.50 reliability=0.50 cost=0.88)
-  fast      deepseek/deepseek-flash score=0.629 ...
-  standard  deepseek/deepseek-v4-pro score=0.626 ...
+  standard  deepseek/deepseek-chat score=0.570 (capability=0.50 quota=0.50 health=0.75 latency=0.50 reliability=0.50 cost=0.83)
+  （local / fast 未配置，回落到会话默认模型；strong / max 同 standard 行；
+   `routes tiers` 里 local/fast 显示为 `(unconfigured)`）
+
+$ freecode routes tiers
+standard  deepseek/deepseek-chat
+strong    deepseek/deepseek-chat
+max       deepseek/deepseek-chat
 ```
 
 （`routes why` 在没有发生过路由决策时报 `No routing decision has been recorded yet.`，
@@ -189,21 +219,28 @@ Filesystem）逐行 `✓ ok` / `! warn` / `× fail`，结尾汇总。判定标�
 - `! Connectivity / <provider>` 401 → key 被拒绝，查 key 而不是网络
   （端点可达但 401 说明网络没问题）。
 
-实跑输出摘录（干净环境，pool 已配、key 未配）：
+实跑输出摘录（干净安装，pool 已配 deepseek、key 为占位值）：
 
 ```
-! Router / laya: bridge not found; searched 3 locations
 ! Connectivity / deepseek: endpoint is reachable but refused the credential (401)
-    no credential found; add one with `freecode account add`
+    the credential in config was rejected — check the key, not the network
 FreeCode is usable.
 ```
+
+401 副文案有两种，按你的配置区分（均为真实输出）：
+
+- 配置里有 key 但被厂商拒绝（如上，占位 key 会触发）→
+  `the credential in config was rejected — check the key, not the network`；
+- 配置里没有任何凭据 →
+  `no credential found; add one with `freecode account add``。
 
 ### 3.2 常见失败
 
 | 症状 | 原因 | 处理 |
 | --- | --- | --- |
 | `freecode: command not found` | 安装目录不在 PATH | 按安装输出加 `export PATH=...` 并 `exec zsh` |
-| doctor 401 | key 无效 / 厂商侧过期 | 重新 `freecode setup --provider X --api-key ...` 或 `freecode account add` |
+| doctor 401 | key 无效 / 厂商侧过期 / 占位 key | 重新 `freecode setup --provider X --base-url … --api-key …` 或 `freecode account add` |
+| doctor 报 `no base URL configured for <provider>` | 脚本路径 setup 未带 `--base-url` | 补 `--base-url <§2 模板表端点>` 重跑 setup（见 §2 说明） |
 | `provider test` 超时 | 内网 / 代理 | 配代理后重试；端点选择见 §2 模板表 |
 | 任务挂 SUSPENDED | 同 tier 全厂商不可用 | `freecode routes` 看各 provider health；补一个账号（`freecode account add`） |
 | 隔离任务没合入 | 没跑 merge | `freecode tasks` 列出在途任务 → `freecode tasks merge <id>` |
