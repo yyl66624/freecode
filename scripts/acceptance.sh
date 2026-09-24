@@ -255,7 +255,11 @@ else
     # The verdict runner reads the trace JSONL that the trace sink just wrote,
     # and prints OK / WRONG_CWD / NO_WRITE / ERROR.  This is the P0-2
     # deliverable: "只看脚本输出即可区分模型没调用写工具 vs 隔离上下文丢失".
-    TRACE_FILE="$(find "$XDG_DATA_HOME/freecode/trace" -name '*.jsonl' 2>/dev/null | head -1)"
+    #
+    # M4 fix: use `ls -t` to pick the most-recently-modified trace file so
+    # stale JSONL files from earlier runs do not pollute the verdict.  If
+    # there is more than one file, the newest one is the current run's.
+    TRACE_FILE="$(ls -t "$XDG_DATA_HOME/freecode/trace"/*.jsonl 2>/dev/null | head -1)"
     if [[ -n "$TRACE_FILE" ]]; then
       printf '  isolation verdict trace: %s\n' "$TRACE_FILE" >&2
       VERDICT_OUT="$(bash "$HERE/scripts/isolation-verdict.sh" "$TRACE_FILE" any 2>/dev/null)"

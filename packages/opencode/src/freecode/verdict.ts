@@ -112,12 +112,35 @@ export function decide(events: Trace.Event[]): Result {
   const written: string[] = []
   const wrong: string[] = []
   const right: string[] = []
+  // Positional pairing: when events carry no callID the resolve and its
+  // outcome sit adjacent in trace order, so walk them as pairs.  The outcome
+  // that belongs to the *n*‑th resolve is the *n*‑th outcome (counting only
+  // outcomes for write tools) seen so far.  This gives each outcome a 1‑to‑1
+  // mapping to the resolve it actually produced, which is the correct
+  // fallback when the trace did not record a callID.
+  //
+  // Track which resolves have been claimed by an outcome so far.  In the
+  // common interleaving (r0,o0,r1,o1,…) the i‑th outcome claims the i‑th
+  // resolve; in the non‑interleaved case (r0,r1,o0,o1,…) it also works
+  // because the first unclaimed resolve is the natural match.
+  const claimed = new Array(isolates.length).fill(false)
   for (const outcome of outcomes) {
     const callId = outcome["callID"]
-    const source =
-      callId !== undefined
-        ? isolates.find((event) => event["callID"] === callId)
-        : isolates[isolates.length - 1]
+    let source: (typeof isolates)[number] | undefined
+    if (callId !== undefined) {
+      source = isolates.find((event) => event["callID"] === callId)
+    } else {
+      // Fall back to the first unclaimed resolve.  In sequential traces the
+      // outcomes and resolves appear in the same order, so the first one not
+      // yet paired is the correct match.  This is strictly better than
+      // "the last resolve" which over‑counts when there is more than one
+      // write‑tool call.
+      const idx = claimed.indexOf(false)
+      if (idx !== -1) {
+        source = isolates[idx]
+        claimed[idx] = true
+      }
+    }
     if (!source) continue
     if (outcome["outcome"] !== "success") continue
     const target = String(source["resolved"])

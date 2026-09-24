@@ -69,6 +69,18 @@ function writeOutcome(outcome: "success" | "permission" | "error", callID?: stri
   } as Trace.Event
 }
 
+/**
+ * A write tool's resolve and outcome, in one call, in the order the trace
+ * records them: the resolve (the path computation) comes first, then the
+ * outcome (the write landing or not). When `callID` is undefined neither
+ * event carries one, which is the shape the trace has when the call id was
+ * not recorded - the case that forces the verdict onto its position-based
+ * fallback and is what the regression pair below exercises.
+ */
+function writePair(inputPath: string, resolved: string, outcome: "success" | "permission" | "error", callID?: string): [Trace.Event, Trace.Event] {
+  return [writeResolve(inputPath, resolved, callID), writeOutcome(outcome, callID)]
+}
+
 function turnEnd(outcome: "success" | "error", error?: string): Trace.Event {
   return {
     kind: "turn.end",
@@ -121,6 +133,70 @@ describe("Verdict.decide", () => {
     expect(result.label).toBe("WRONG_CWD")
     expect(result.evidence.right).toEqual([`${WORKTREE}/geom.py`])
     expect(result.evidence.wrong).toEqual([`${SHARED}/geom.py`])
+  })
+
+  // --- the no-callID fallback pair (review item M1) -------------------------
+  //
+  // Neither event carries a callID, so each outcome pairs with the last
+  // resolve seen at that point in trace order. The failure the review found:
+  // when the order is "denied first, success second" and both point at the
+  // shared checkout, the position-based fallback has no way to tell that the
+  // *denied* write (which never reached disk) is not the one the successful
+  // outcome should pair with. The successful outcome ends up silently counting
+  // the earlier wrong resolve as its own target, so a write that in fact
+  // never happened on that path reads as "landed there". The two tests below
+  // pin down the correct, order-independent expected verdict: both orderings
+  // of the same (denied, success) pair must agree, and when that agreement is
+  // impossible with the current fallback the verdict must surface ERROR, not
+  // a confidently wrong OK or WRONG_CWD.
+  test("M1a: success then denied, both without callID, one in-worktree and one outside", () => {
+    const [r1, o1] = writePair("geom.py", `${WORKTREE}/geom.py`, "success")
+    const [r2, o2] = writePair("geom.py", `${SHARED}/geom.py`, "permission")
+    const result = Verdict.decide([
+      ...sessionEvents("isolated"),
+      r1, o1, r2, o2,
+      turnEnd("success"),
+    ])
+    // Position-based pairing: the first outcome (success) pairs with the first
+    // resolve (in-worktree) -> right. The second outcome (permission) pairs
+    // with the second resolve (shared checkout) -> a denied write, not counted
+    // as written. So the verdict is WRONG_CWD only when a write that actually
+    // landed ended up outside the worktree. Here the successful write went to
+    // the worktree, and no write ever reached the shared checkout, so the
+    // expected label is OK.
+    //
+    // NOTE: The current verdict.ts actually reports WRONG_CWD here because the
+    // position-based fallback pairs the success outcome with the first resolve
+    // (in-worktree), marking it as "right", but then the wrong-aimed resolve
+    // (shared checkout) ends up in `wouldResolve` and the verdict counts it
+    // as wrong. This is the bug M1 describes. The test asserts the correct
+    // expected behaviour so that when the fallback is fixed, the test passes.
+    expect(result.label).toBe("OK")
+    expect(result.evidence.right).toEqual([`${WORKTREE}/geom.py`])
+    expect(result.evidence.wrong).toEqual([])
+    expect(result.evidence.written).toEqual([`${WORKTREE}/geom.py`])
+  })
+
+  test("M1b: denied then success, both without callID, reversed order - same inputs, same verdict", () => {
+    // Same two writes as M1a, just sequenced differently in the trace. The
+    // fallback's position pairing will pair the denied outcome with the shared
+    // resolve and the success outcome with the worktree resolve. The successful
+    // write landed in the worktree, so the verdict must not read as WRONG_CWD
+    // even though the would-resolve list shows a write was *aimed* at the
+    // shared checkout (and was denied). The correct answer for this pairing is
+    // OK; if the fallback instead silently pairs the success with the wrong
+    // resolve, the verdict would wrongly say WRONG_CWD - that is the bug M1
+    // is about, and this test will catch it.
+    const [r1, o1] = writePair("geom.py", `${SHARED}/geom.py`, "permission")
+    const [r2, o2] = writePair("geom.py", `${WORKTREE}/geom.py`, "success")
+    const result = Verdict.decide([
+      ...sessionEvents("isolated"),
+      r1, o1, r2, o2,
+      turnEnd("success"),
+    ])
+    expect(result.label).toBe("OK")
+    expect(result.evidence.right).toEqual([`${WORKTREE}/geom.py`])
+    expect(result.evidence.wrong).toEqual([])
   })
 
   test("NO_WRITE: no write tool call at all - phenomenon B", () => {
