@@ -13,6 +13,7 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { FormatError } from "./cli/error"
 import { ServeCommand } from "./cli/cmd/serve"
 import { DebugCommand } from "./cli/cmd/debug"
+import { VersionCommand } from "./cli/cmd/version"
 import { StatsCommand } from "./cli/cmd/stats"
 import { McpCommand } from "./cli/cmd/mcp"
 import { GithubCommand } from "./cli/cmd/github"
@@ -107,6 +108,7 @@ const cli = yargs(args)
   .command(ProviderTestCommand)
   .command(ConfigValidateCommand)
   .command(AccountCommand)
+  .command(VersionCommand)
   .command(StatsCommand)
   .command(ExportCommand)
   .command(ImportCommand)

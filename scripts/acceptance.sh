@@ -69,6 +69,30 @@ printf 'prefix %s\n' "$PREFIX"
 
 # --- build and install --------------------------------------------------------
 
+head_ "Preflight: build SHA matches source HEAD"
+
+# The stale-binary trap: the binary at dist/ may have been built from an
+# earlier source tree. `version.sh check` (which now includes the build SHA
+# provenance check) is the single gate. It exits non-zero if the binary's
+# embedded build SHA does not equal the current git HEAD. We run it directly
+# against the dist binary so a broken build is caught before any install.
+#
+# NOTE: this gate is the whole point of P0-5. The `--skip-network` mode
+# still runs it: skipping the model call must not skip verifying the
+# binary is current.
+
+if bash "$HERE/scripts/version.sh" check >"$PREFIX/version-check.log" 2>&1; then
+  ok "version.sh check passed (build SHA == source HEAD)"
+  # Echo the key lines so they are visible in the acceptance output
+  grep -E '^(ok|FAIL)' "$PREFIX/version-check.log" || true
+else
+  no "version.sh check FAILED — the binary is stale or was not built"
+  cat "$PREFIX/version-check.log"
+  # Hard exit: the acceptance test is meaningless without a current binary.
+  printf '\naborting: rebuild with `cd packages/opencode && bun run package`\n'
+  exit 1
+fi
+
 head_ "Build and install"
 
 if [[ -x "$HERE/packages/opencode/dist/freecode-darwin-arm64/bin/freecode" ]]; then

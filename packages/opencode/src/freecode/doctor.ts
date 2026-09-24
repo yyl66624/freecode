@@ -42,6 +42,10 @@ export interface Input {
   version: string
   /** The upstream OpenCode base, so a bug report identifies the fork point too. */
   upstream?: string
+  /** Short source HEAD SHA the binary was compiled from (build provenance). */
+  buildSha?: string
+  /** True when the source tree had uncommitted changes at build time. */
+  buildDirty?: boolean
   /** Project the user is in. */
   workspace: string
   config?: ConfigV1.Info
@@ -68,6 +72,23 @@ export async function run(input: Input): Promise<Check[]> {
     // Both versions: the product one identifies the release, the upstream one makes
     // a rebase reproducible from a bug report alone.
     detail: `${input.version}${input.upstream ? ` (upstream ${input.upstream})` : ""} at ${process.execPath}`,
+  })
+
+  // Build provenance: the short source HEAD SHA the binary was compiled from,
+  // injected at compile time. "unknown" means the binary predates this field
+  // or was built from a non-git tree; either way the acceptance script's
+  // SHA check will refuse it, which is the desired loud failure.
+  add({
+    group: "Core",
+    name: "build",
+    status: input.buildSha && input.buildSha !== "unknown" ? "ok" : "warn",
+    detail: input.buildSha && input.buildSha !== "unknown"
+      ? `build ${input.buildSha}${input.buildDirty ? " (dirty)" : " (clean)"}`
+      : "build SHA unknown (binary predates provenance; rebuild with bun run package)",
+    remedy:
+      input.buildSha && input.buildSha !== "unknown"
+        ? undefined
+        : "Run `bun run package` in packages/opencode to rebuild with build SHA",
   })
 
   const platform = `${process.platform}-${process.arch}`

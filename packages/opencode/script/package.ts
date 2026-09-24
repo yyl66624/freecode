@@ -30,6 +30,32 @@ const outfile = `${outdir}/bin/freecode`
 await $`rm -rf ${outdir}`
 await $`mkdir -p ${outdir}/bin`
 
+// Build provenance: the short HEAD SHA and dirty flag of the source tree this
+// binary was compiled from are baked in at compile time so the binary can prove
+// its own lineage. `scripts/version.sh check` and `freecode version --json`
+// read these back; `scripts/acceptance.sh` refuses to run a binary whose
+// build SHA does not match the current source HEAD. This is the stale-binary
+// trap from DEVELOPMENT.md, closed at the source rather than detected after
+// a confusing failure.
+const { execSync } = await import("node:child_process")
+let buildSha = "unknown"
+let buildDirty = "0"
+try {
+  const toplevel = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim()
+  const sha = execSync(`git -C ${toplevel} rev-parse --short HEAD`, {
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  }).trim()
+  buildSha = sha
+  const status = execSync(`git -C ${toplevel} status --porcelain`, {
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  }).trim()
+  if (status.length > 0) buildDirty = "1"
+} catch {
+  // not a git checkout or git unavailable — record "unknown"
+}
+
 // The Solid transform is needed because the TUI is written with it; without the
 // plugin the build fails on JSX it cannot parse.
 const { createSolidTransformPlugin } = await import("@opentui/solid/bun-plugin")
@@ -72,6 +98,8 @@ const result = await Bun.build({
     OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + treeSitterWorkerPath,
     OPENCODE_WORKER_PATH: workerPath,
     OPENCODE_CHANNEL: `'local'`,
+    OPENCODE_BUILD_SHA: `'${buildSha}'`,
+    OPENCODE_BUILD_DIRTY: buildDirty,
   },
 })
 

@@ -7,6 +7,10 @@ import { Provider } from "@/provider/provider"
 import { InstanceState } from "@/effect/instance-state"
 import { version as freecodeVersion, upstreamVersion } from "@/freecode/freecode"
 import { Doctor } from "@/freecode/doctor"
+import {
+  InstallationBuildSha,
+  InstallationBuildDirty,
+} from "@opencode-ai/core/installation/version"
 
 /**
  * `freecode doctor` — one command whose output can be pasted into a bug report.
@@ -44,6 +48,8 @@ export const DoctorCommand = effectCmd({
       Doctor.run({
         version: freecodeVersion,
         upstream: upstreamVersion,
+        buildSha: InstallationBuildSha,
+        buildDirty: InstallationBuildDirty,
         workspace: instance.directory,
         config: cfg,
         providers: Object.keys(providers).sort(),
