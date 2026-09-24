@@ -10,6 +10,8 @@
 
 文档基于 `freecode-main` @ `545c435` 的代码现状撰写；所有断言与 P0-1 trace 字段、P0-2 verdict 标签一一对应，可被 `bash scripts/isolation-verdict.sh` 直接验证。
 
+**重要**：§1.2 的断言集合是**验收锚点定义**，不是对当前 HEAD 的已跑判定结果。实际跑取与判定归 P0-8（干净 Mac 全链路），G4 依赖之；本文档不背书任何「已执行通过」的结论。
+
 ---
 
 ## 1. 隔离契约
@@ -39,8 +41,8 @@ verdict 标签来自 `packages/opencode/src/freecode/verdict.ts`（P0-2）。
 
 | # | 断言 | trace 字段 | 判定 |
 | --- | --- | --- | --- |
-| A1 | 每个 subagent 会话有且只有一条 `session` 记录，且 `sessionID` 与 `turn.end`/`tool.*` 事件一致 | `sessionID` | 缺失 → verdict `ERROR` |
-| A2 | `mode` ∈ {`isolated`, `shared`, `fallback`}，无第四种取值 | `mode` | 非法值 → 实现缺陷 |
+| A1 | 每个 subagent 会话至少有一条 `session` 记录，且 `sessionID` 与 `turn.end`/`tool.*` 事件一致。**background 追加场景**：`task.ts` 的 `background.extend`（task.ts:343）与 `task_id` resume（task.ts:141/162）会重新调用 `Isolation.prepare`，每轮产生**新的一条** `session` 记录与新的 `turn.end`；因此一个 subagent 会话在 N 次 task 调用下会有 N 条 `session` + N 条 `turn.end`。**verdict 的覆盖范围**：`decide()` 取 `events.find(kind == "session")`，即**第一条** `session` 记录；对多轮场景，verdict 反映的是第一轮的隔离判定，后续轮的写工具调用会挂回第一轮的 `worktree` 上判定（verdict.ts:120 的 `isolates[isolates.length-1]` 兜底逻辑）。**M0 契约立场**：background/resume 每轮视为新 turn，A1 的「至少一条」与 C1 的「至多一条 per task call」为当前代码事实；**代码层修复**（turn.end 带轮次/resumed 标记 + verdict 取最后一条）归 P0-4 范围，M0 文档锚点以当前行为为准。 | `sessionID` | 缺失 → verdict `ERROR` |
+| A2 | `mode` ∈ {`isolated`, `shared`, `fallback`}，无第四种取值。`resumed` 字段在 `Trace.session` 签名中存在（trace.ts:127/143），但当前 `Isolation.prepare` 从未传值（isolation.ts 中所有 `Trace.session` 调用均缺失 `resumed` 参数），trace 永远 `resumed=false`。**P0-4 须修复**：`Isolation.prepare` 实传 `resumed`，使 trace 能区分首次创建与 resume 复用。 | `mode`, `resumed` | `mode` 非法值 → 实现缺陷；`resumed` 恒为 false 是已知缺口（P0-4 关闭前不影响 verdict 正确性，但影响 trace 可读性） |
 | A3 | `mode=isolated` 时 `worktree` 非空且等于 `directory`；`branch` 非空 | `worktree`, `directory`, `branch` | 缺失 → worktree 创建未落盘即宣称隔离，verdict `ERROR` |
 | A4 | `mode=fallback` 时 `reason` 非空 | `reason` | 缺失 → 降级无解释，属实现缺陷 |
 | A5 | `mode=shared` 时 `reason` 给出策略依据（policy `never` / agent 声明 shared / 无写权限） | `reason` | 缺失 → 判读无法区分策略共享与漏判 |
@@ -51,14 +53,18 @@ verdict 标签来自 `packages/opencode/src/freecode/verdict.ts`（P0-2）。
 | --- | --- | --- | --- |
 | B1 | `mode=isolated` 时，每次写工具的 `resolved` 路径必须位于 `session.worktree` 之内（`cwd` 即 worktree 目录） | `resolved`, `cwd` vs `session.worktree` | 违反 → verdict `WRONG_CWD`（现象 A：隔离上下文丢失） |
 | B2 | `mode=shared` 或 `fallback` 时，写路径落在共享检出具 `session.directory`（策略/降级，契约内） | `resolved` vs `directory` | 落在两者之外且 `external=true` → 需外部权限放行，属用户可见行为 |
-| B3 | 每次 `tool.resolve` 必须有配对的 `tool.outcome`（同 `callID`），outcome ∈ {`success`, `permission`, `error`} | `callID`, `outcome` | 缺失 → 工具调用悬挂，verdict `ERROR` |
-| B4 | `turn.end.outcome=success` 且无任何写工具调用 → 这是**模型行为**（现象 B：没写），不是隔离缺陷 | 写工具 `tool.resolve` 事件缺失 | verdict `NO_WRITE`；责任方是模型/prompt，不是隔离代码 |
+| B3 | `write` 与 `apply_patch` 的 `tool.resolve` 带 `callID`，必须有配对的 `tool.outcome`（同 `callID`）；**`edit` 工具当前 resolve 无 `callID` 传参**（edit.ts:85 缺 `callID` 字段），outcome 记录在 edit.ts:191/201 同样缺 `callID`，verdict.ts:120 以「最后一条 resolve」兜底配对——这是**实现妥协**而非契约保证，P0-4 须补 callID 并移除兜底。`shell.ts` 读类工具的 `tool.resolve`（shell.ts:616）也进 trace，但 verdict 的 `WRITE_TOOLS` 集合（write/edit/apply_patch）不含 shell，读事件不参与 verdict 判定。**M0 核验项**：`isolation-verdict.sh` 输出中若出现「兜底配对」（resolve 无 callID，outcome 无 callID，二者按最后一条 resolve 关联）须打标记，避免 P0-4 修复后把兜底误读为正确配对。 | `callID`, `outcome` | 写工具（write/apply_patch）缺失 → verdict `ERROR`；edit 兜底配对为已知限制（P0-4 关闭） |
+| B4 | 以下任一情形 → `NO_WRITE`，责任方是模型/prompt 或权限系统，不是隔离代码：
+（i）subagent 未调用任何写工具（`isolates.length === 0`）；
+（ii）写工具 resolve 存在但所有 outcome 均非 success（`written.length === 0`，例如被 permission 拒绝或未完成）；
+（iii）turn.end 为 error / 任一写工具 outcome 为 error / session 记录缺失 / mode ≠ isolated → 各自归 `ERROR`。
+以上 (i)(ii) 读作模型/权限行为，非隔离缺陷；验收用例须选用能触发写工具的任务，否则 NO_WRITE 不是门禁失败。 | 写工具 `tool.resolve` 事件缺失或全部 denied | verdict `NO_WRITE`（(i)/(ii)）；`ERROR`（(iii)） |
 
 **C. 会话终结层（`kind: "turn.end"` 事件）**
 
 | # | 断言 | trace 字段 | 判定 |
 | --- | --- | --- | --- |
-| C1 | 每个 subagent 会话恰有一条 `turn.end` | `sessionID` | 缺失 → verdict `ERROR` |
+| C1 | 每个 task 调用至多一条 `turn.end`；**background 追加 / resume 场景**允许多条（每轮新 task 调用产生新 turn.end，见 A1 说明）。当前 verdict 取 `events.find`，即第一条 turn.end；多轮场景下后续轮的 turn.end 对 verdict 无影响（verdict 基于第一条 session 的 `worktree` 字段）。P0-4 代码修复后 turn.end 须带轮次标记，verdict 改为取最后一条。 | `sessionID` | 首轮缺失 → verdict `ERROR`；多轮中某轮缺失 → 该轮无 turn.end 记录，属 trace 完整性缺口（P0-4 归因） |
 | C2 | 主检出在整个 isolated 运行中保持不变：写工具的 `resolved` 全部在 worktree 内（即 B1 的会话级汇总） | `session.wrong`（verdict evidence） | 违反 → `WRONG_CWD`，隔离问题未关闭 |
 
 **D. verdict 判定矩阵（P0-2，`scripts/isolation-verdict.sh` 的输出）**
@@ -106,7 +112,7 @@ bash scripts/isolation-verdict.sh "$XDG_DATA_HOME/freecode/trace/<pid>.jsonl"
 | Gate | 内容 | 验证命令 / 动作 | 通过条件 |
 | --- | --- | --- | --- |
 | **G1** | 隔离缺陷修复（P0-4） | P0-4 issue 状态 `done`，且其附带的真实 provider 运行证据（≥10 次，verdict 全 `OK`） | 证据齐全 |
-| **G2** | 隔离判定可复核 | `bash scripts/isolation-verdict.sh <trace>` 对最近一次 acceptance trace 输出全 `OK` | 零 `WRONG_CWD`/`ERROR` |
+| **G2** | 隔离判定可复核 | `bash scripts/isolation-verdict.sh <trace>` 对 trace 中**每个含 `kind:session` 的 subagent 会话**均输出 `OK` | 所有 subagent 会话（不只是一条）均零 `WRONG_CWD`/`ERROR` |
 | **G3** | stale-binary 校验生效（P0-5） | ① `bun run package` 后 binary 的 build SHA 可查（`freecode --version` 或 doctor 输出）且 == 源码 `git rev-parse --short HEAD`；② 反例：手工改 SHA 或跳过 build 直接跑验收，脚本必须失败 | ①相等；②反例失败且给出指引 |
 | **G4** | 干净 Mac 全链路（P0-8） | 按 P0-8 的 11 步执行，逐步记录 pass/fail + 证据（命令 + 输出片段） | 11/11 通过；失败项须已独立成 issue 并标注阻塞/非阻塞 |
 | **G5** | 安装与文档可复现（P0-6/P0-7） | 在**干净机器/干净 prefix** 上按 P0-7 文档从零执行：clone → 安装 → setup → doctor → 首任务；命令全部照做且成功 | 全链路成功；文档与 `freecode --help`/`doctor` 实际输出一致 |
@@ -117,6 +123,13 @@ bash scripts/isolation-verdict.sh "$XDG_DATA_HOME/freecode/trace/<pid>.jsonl"
 
 **门禁顺序**：G1→G2 依赖 P0-4 完成；G3 依赖 P0-5；G4 依赖 P1-P7；G9 在 G4 之后；
 G6/G7/G8 在 G9 提交时复查一次。P0-10（thinker 放行）逐条核验 G1–G9。
+
+**G7 核查基线补充**（thinker 评审项）：`873ffb1`（CLI 入口/TUI/doctor，+3873 行）在 `a3e1a3d` 之前已落
+`freecode-main`，其 commit message 引 FREE-17/P3（非 P0 清单）。按 §3 冻结规则，它属「新 CLI 子命令 + TUI
+变更」，落在「不允许」列。P0-10 执行 G7 的 `git log e027eb5..HEAD` 逐条比对时须先判定：该 commit 属**冻结规则
+生效前存量**（允许保留）还是冻结期内新混入（打回）。判定标准：`873ffb1` 的时间戳若早于 P0 冻结期起点
+（M0 父 issue FREE-3 创建时间 2026-09-22T15:45Z）则为存量，否则打回。本 issue 评审不为它背书，只要求在
+G7 核查时把它标出来。
 
 ---
 
@@ -194,7 +207,23 @@ turn.end   : sessionID, parentSessionID, agent, outcome (success|error), error
 
 本文 §1.2 的断言 A1–A5 / B1–B4 / C1–C2 逐字段覆盖上表，
 verdict 标签（OK / WRONG_CWD / NO_WRITE / ERROR）由 `verdict.ts` 的 `decide()` 实现，
-并有 `test/freecode/verdict.test.ts` 的样本兜底。
+并有 `packages/opencode/test/freecode/verdict.test.ts` 的样本兜底。
+
+---
+
+## 6. trace 覆盖缺口（已知，P0-4 关闭）
+
+以下两条是 trace 层面的**已知缺口**，记录在此以避免 P0-4 修复隔离时把它们误读为
+写证据或漏判：
+
+1. **`edit.ts` 无 callID**：`edit` 工具的 `tool.resolve`（edit.ts:85）与
+   `tool.outcome`（edit.ts:191/201）均未传 `callID`，verdict.ts:120 以「最后一条
+   resolve」兜底配对。`write`（write.ts:46/80）与 `apply_patch`（apply_patch.ts:64/288）
+   均带 callID，配对正确。P0-4 须补 edit 的 callID 并移除兜底逻辑。
+2. **`shell.ts` 读事件进 trace**：`shell.ts:616` 的 `Trace.toolResolve` 记录的是 shell
+   读类操作（`resolved` 为 shell 工作目录，非文件写目标）。verdict 的 `WRITE_TOOLS`
+   集合（write/edit/apply_patch）不含 shell，故读事件不参与 verdict 判定。P0-4 修隔离
+   时不应把 shell 读事件误当作写证据。
 
 ---
 
