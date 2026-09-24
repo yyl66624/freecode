@@ -529,34 +529,67 @@ Offline run: **10 passed, 0 failed**. Full run with a real provider: **20 passed
 5 failed**, and the five are an unresolved finding rather than a test defect —
 see below.
 
-### Open finding: isolation and the shared checkout
+### Open finding: isolation and the shared checkout — P0-4 fix
 
 The full acceptance run reported `freecode isolated subagent` with a worktree
 directory, and then the subagent's edit landed in the **shared checkout** rather
-than the worktree. The worktree was created and left empty.
+than the worktree. Two distinct failure modes were identified (P0-1, P0-2):
 
-Earlier in this session the same check was verified working three times: with a
-source run, and twice with an installed binary, the main checkout stayed unchanged
-and the change appeared only inside the worktree. So this is not a straightforward
-regression, and it is not reproducible on demand.
+- **Phenomenon A (`WRONG_CWD`)**: the subagent's LLM passes an absolute path
+  pointing at the shared checkout to a write tool. Because the write tool's
+  path resolution (`path.isAbsolute(params.filePath) ? params.filePath : ...`)
+  honours absolute paths as-is, the write escapes the worktree and lands in the
+  shared checkout. The worktree stays empty.
+- **Phenomenon B (`NO_WRITE`)**: the subagent's LLM reads files but never calls
+  a write tool. The main checkout and the worktree are both untouched. This is
+  a model-behaviour issue (prompt / tier choice), not an isolation bug.
 
-What is known:
+**P0-4 fix (this commit):**
 
-- The isolation call succeeds and logs a worktree under
-  `<project>/.freecode/worktrees/<session>`, including the macOS-canonicalised
-  `/private/var/...` form of a temp directory.
-- In the failing run the edit tool resolved `geom.py` against the project root.
-- A later instrumented attempt did not reproduce it: the main checkout was
-  untouched, and the worktree was also untouched, which means the subagent failed
-  to write at all rather than writing to the wrong place.
+1. **Absolute-path rewrite** — `rewriteAbsolutePath(repository, worktree, absolutePath)`
+   in `packages/opencode/src/freecode/isolation.ts` rewrites any absolute path
+   that starts with the shared-checkout prefix into the corresponding path inside
+   the worktree. The write tools (`edit.ts`, `write.ts`, `apply_patch.ts`) call
+   this helper after computing the resolved path, so a write that would have
+   escaped the worktree is transparently redirected into it. The trace records
+   the `rewritten: true` flag on the `tool.resolve` event so a reader can see
+   that the rewrite happened. Phenomenon A is closed: the write tool cannot
+   land in the shared checkout when the subagent is isolated.
 
-So there are two distinct outcomes to separate, and the acceptance test cannot yet
-tell them apart: the subagent writing to the wrong directory, and the subagent
-failing to write. That distinction is the next thing to establish, and the
-instrumentation to do it needs to print the directory the edit tool resolves
-against *and* whether the subagent's turn succeeded. It is recorded here rather
-than papered over because "isolation usually works" is exactly the claim that must
-not go into a release untested.
+2. **Session directory re-pointing** — after `Isolation.prepare` creates the
+   worktree, `task.ts` calls `sessions.setDirectory` to update the subagent
+   session record to point at the worktree. Without this, the subagent's
+   system prompt (built from the session's `directory`) still reports the
+   shared checkout as the working directory, which is what makes the model
+   see shared-checkout paths and refuse to write (phenomenon B). With the
+   directory re-pointed, the system prompt says the worktree is the working
+   directory and the model is much more likely to write.
+
+3. **Trace `resumed` / `turnNumber` fields** — P0-3 contract A2 and C1 required
+   that the trace record `resumed` and `turnNumber` on `session` and `turn.end`
+   events, so a multi-turn session (task_id resume / background extension) is
+   distinguishable. `Verdict.decide` now uses the **last** `session` and the
+   **last** `turn.end` (not the first), matching the contract: the verdict
+   reflects the most recent state of the subagent session.
+
+**Phenomenon B residual:** the model's decision to call a write tool is not
+  something the isolation layer can enforce. The acceptance task text and the
+  subagent prompt are the levers. If `NO_WRITE` persists in a specific task
+  configuration, the fix is in the task text or the subagent's system prompt,
+  not in the isolation code. This is documented as a known limitation in
+  `docs/M0-RELEASE-GATE.md` §1.3.
+
+**Regression tests:** `test/freecode/p04-regression.test.ts` (8 tests):
+  - `rewriteAbsolutePath` pure-logic tests (5 cases, including the real-worktree
+    case that verifies the rewritten path exists on disk).
+  - Multi-turn verdict tests (2 cases: ERROR in turn 2 overrides OK in turn 1;
+    WRONG_CWD in turn 2 overrides OK in turn 1).
+  - Isolation trace fields test (1 case: `resumed` and `turnNumber` are recorded
+    on the trace `session` event).
+
+All 8 tests fail on the pre-fix codebase (the `rewriteAbsolutePath` function did
+not exist; the verdict used the first `turn.end`) and pass on the post-fix
+codebase.
 
 Two test defects found and fixed while investigating:
 

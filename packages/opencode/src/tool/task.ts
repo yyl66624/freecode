@@ -1,5 +1,6 @@
 import * as Tool from "./tool"
 import DESCRIPTION from "./task.txt"
+import path from "path"
 import { ToolJsonSchema } from "./json-schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { BackgroundJob } from "@/background/job"
@@ -141,6 +142,15 @@ export const TaskTool = Tool.define(
       const session = params.task_id
         ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
+      // P0-4 / P0-3 contract A2+C1: a `task_id` resume is a new turn in the
+      // same subagent session. Recording it as `resumed` and the new
+      // `turnNumber` is what lets the trace tell first-creation from resume
+      // reuse and lets the verdict read the LAST turn of a multi-turn session
+      // instead of the first.
+      const resumed = session !== undefined
+      const turnNumber = session
+        ? (session.metadata?.freecodeTurnNumber as number | undefined) ?? 0
+        : 0
       const childPermission = deriveSubagentSessionPermission({
         parentSessionPermission: parent.permission ?? [],
         subagent: next,
@@ -226,7 +236,40 @@ export const TaskTool = Tool.define(
           mode: next.workspaceMode,
           model: { providerID: model.providerID, modelID: model.modelID },
           parentSessionID: ctx.sessionID,
+          // P0-4: the session record tells first-creation from resume reuse
+          // (P0-3 contract A2) and every turn is numbered so the verdict can
+          // read the last one (C1).
+          resumed,
+          turnNumber: turnNumber + 1,
+          parentDirectory: instance.directory,
+          parentWorktree: instance.worktree,
         })
+        // P0-4: when the subagent is isolated, the session record must point
+        // at the worktree, not the parent's directory. Without this, the
+        // parent's system prompt (built from the session's `directory`)
+        // reports the shared checkout as the working directory even when
+        // the subagent's file tools resolve into the worktree — which is
+        // what makes the subagent see shared-checkout paths and then refuse
+        // to write (phenomenon B, P0-1 root cause #2). Re-pointing the
+        // session record after `Isolation.prepare` creates the worktree keeps
+        // the two consistent without changing the create-then-reuse ordering
+        // that a resumed task depends on.
+        if (isolation.mode === "isolated" && isolation.directory) {
+          yield* sessions
+            .setDirectory({
+              sessionID: nextSession.id,
+              directory: isolation.directory,
+              path: path.relative(instance.worktree, isolation.directory),
+            })
+            .pipe(Effect.catchCause(() => Effect.void))
+          // Record the turn number so the next resume reads it back.
+          yield* sessions
+            .setMetadata({
+              sessionID: nextSession.id,
+              metadata: { freecodeTurnNumber: turnNumber + 1 },
+            })
+            .pipe(Effect.catchCause(() => Effect.void))
+        }
 
         const prompt = ops.prompt({
           messageID: MessageID.ascending(),
@@ -276,6 +319,8 @@ export const TaskTool = Tool.define(
             agent: next.name,
             outcome: "error",
             error: message,
+            turnNumber: turnNumber + 1,
+            resumed,
           })
           return yield* Effect.fail(new Error(errorMessage))
         }
@@ -288,6 +333,8 @@ export const TaskTool = Tool.define(
             agent: next.name,
             outcome: "error",
             error: failed.state.error,
+            turnNumber: turnNumber + 1,
+            resumed,
           })
           return yield* Effect.fail(new Error(errorMessage))
         }
@@ -296,6 +343,8 @@ export const TaskTool = Tool.define(
           parentSessionID: ctx.sessionID,
           agent: next.name,
           outcome: "success",
+          turnNumber: turnNumber + 1,
+          resumed,
         })
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })

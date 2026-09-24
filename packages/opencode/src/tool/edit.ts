@@ -18,6 +18,7 @@ import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { containsPath } from "../project/instance-context"
 import { Trace } from "@/freecode/trace"
+import { rewriteAbsolutePath } from "@/freecode/isolation"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
 
@@ -79,18 +80,30 @@ export const EditTool = Tool.define(
           }
 
           const instance = yield* InstanceState.context
-          const filePath = path.isAbsolute(params.filePath)
+          // P0-4: rewrite an absolute path that points at the shared checkout
+          // into the subagent's worktree (phenomenon A, P0-1 root cause #1).
+          const inputPath = params.filePath
+          let filePath = path.isAbsolute(params.filePath)
             ? params.filePath
             : path.join(instance.directory, params.filePath)
+          let rewritten = false
+          if (path.isAbsolute(filePath)) {
+            const target = rewriteAbsolutePath(instance.worktree, instance.directory, filePath)
+            if (target !== filePath) {
+              filePath = target
+              rewritten = true
+            }
+          }
           Trace.toolResolve({
             sessionID: ctx.sessionID,
             messageID: ctx.messageID,
             callID: ctx.callID,
             tool: "edit",
-            inputPath: params.filePath,
+            inputPath,
             cwd: instance.directory,
             resolved: filePath,
             external: !containsPath(filePath, instance),
+            rewritten,
           })
           yield* assertExternalDirectoryEffect(ctx, filePath)
 

@@ -84,9 +84,18 @@ export function isWriteTool(tool: string): boolean {
  * is what keeps a parent's own tool calls from skewing the verdict.
  */
 export function decide(events: Trace.Event[]): Result {
-  const session = events.find((event): event is Extract<Trace.Event, { kind: "session" }> =>
+  // P0-4 / P0-3 contract A1+C1: a multi-turn session (a task_id resume or a
+  // background extension) has one `session` record and one `turn.end` record
+  // per turn. The verdict must judge the LAST turn — it is the one that says
+  // where the write most recently landed. A `resumed` flag on the trace
+  // distinguishes first-creation from resume-reuse.
+  const sessions = events.filter((event): event is Extract<Trace.Event, { kind: "session" }> =>
     event.kind === "session",
-  ) as Extract<Trace.Event, { kind: "session" }> | undefined
+  )
+  const turns = events.filter((event): event is Extract<Trace.Event, { kind: "turn.end" }> =>
+    event.kind === "turn.end",
+  )
+  const session = sessions.length > 0 ? sessions[sessions.length - 1] : undefined
   const isolates: Extract<Trace.Event, { kind: "tool.resolve" }>[] = []
   const outcomes: Extract<Trace.Event, { kind: "tool.outcome" }>[] = []
   for (const event of events) {
@@ -97,9 +106,7 @@ export function decide(events: Trace.Event[]): Result {
       outcomes.push(event as Extract<Trace.Event, { kind: "tool.outcome" }>)
     }
   }
-  const turn = events.find(
-    (event): event is Extract<Trace.Event, { kind: "turn.end" }> => event.kind === "turn.end",
-  ) as Extract<Trace.Event, { kind: "turn.end" }> | undefined
+  const turn = turns.length > 0 ? turns[turns.length - 1] : undefined
 
   // The subagent's own worktree, straight out of the trace record. The trace
   // is the single source of truth: the verdict says where a write landed

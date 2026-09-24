@@ -58,9 +58,32 @@ type StampedEvent = Event & { ts: number; pid: number }
 
 let currentFile: string | undefined
 let started = false
+let _currentFileOverride: string | undefined = undefined
+
+/**
+ * Test-only: point the trace at a specific file without depending on
+ * `XDG_DATA_HOME` (which the trace module caches on first write). Must be
+ * called before any `Trace.write()` in the process.
+ */
+export function _setCurrentFile(file: string | undefined) {
+  _currentFileOverride = file
+  if (file !== undefined) {
+    currentFile = file
+    started = false
+  }
+}
+
+/**
+ * Test-only: force the trace on for the rest of the process without needing
+ * to set the env var before module load.
+ */
+export function _setConfigEnabled(value: boolean) {
+  configEnabled = value
+}
 
 function file(): string | undefined {
   if (currentFile) return currentFile
+  if (_currentFileOverride) return _currentFileOverride
   // Use XDG_DATA_HOME directly rather than Global.Path.data, so the trace
   // is written to the same location as the FreeCode state file (resources.json)
   // and the test harness can point both at its own prefix without a race.
@@ -125,6 +148,8 @@ export function session(input: {
   parentSessionID?: string
   agent: string
   resumed?: boolean
+  /** 1-based turn ordinal within this subagent session. */
+  turnNumber?: number
   model?: { providerID: string; modelID: string }
   mode: "isolated" | "shared" | "fallback"
   directory?: string
@@ -141,6 +166,7 @@ export function session(input: {
     parentSessionID: input.parentSessionID,
     agent: input.agent,
     resumed: input.resumed ?? false,
+    turnNumber: input.turnNumber,
     model: input.model,
     mode: input.mode,
     directory: input.directory,
@@ -159,6 +185,12 @@ export function session(input: {
  * against (the resolved cwd), and `resolved` is the final absolute path.
  * `external` records whether the path is outside both the instance directory
  * and its worktree - an `external_directory` permission ask follows.
+ *
+ * `rewritten` is set when the isolation layer redirected an absolute path
+ * that pointed at the shared checkout to the corresponding path inside the
+ * subagent's worktree (phenomenon A, P0-1 root cause #1): the write lands in
+ * the worktree instead of silently escaping it. `inputPath` still records
+ * what the model asked for, so the trace shows both sides of the rewrite.
  */
 export function toolResolve(input: {
   sessionID: string
@@ -169,6 +201,8 @@ export function toolResolve(input: {
   cwd: string
   resolved: string
   external?: boolean
+  /** Set when an isolated subagent's absolute path was rewritten into its worktree. */
+  rewritten?: boolean
 }) {
   write({
     kind: "tool.resolve",
@@ -180,6 +214,7 @@ export function toolResolve(input: {
     cwd: input.cwd,
     resolved: input.resolved,
     external: input.external,
+    rewritten: input.rewritten,
   })
 }
 
@@ -212,6 +247,13 @@ export function toolOutcome(input: {
  * anything: a turn can end `success` and still never have written, which is
  * phenomenon B ("the subagent did not write at all") as opposed to
  * phenomenon A ("it wrote, to the wrong place").
+ *
+ * `turnNumber` is the 1-based ordinal of this turn within the subagent
+ * session (a resumed task is a new turn) and `resumed` records whether this
+ * turn resumed an existing subagent session (via `task_id` or a background
+ * extension) rather than starting a fresh one. Both come from P0-3 contract
+ * C1: a session can carry several `turn.end` records and the verdict must be
+ * able to tell which one is the last.
  */
 export function turnEnd(input: {
   sessionID: string
@@ -219,6 +261,10 @@ export function turnEnd(input: {
   agent?: string
   outcome: "success" | "error"
   error?: string
+  /** 1-based turn ordinal within this subagent session. */
+  turnNumber?: number
+  /** True when this turn resumed an existing subagent session. */
+  resumed?: boolean
 }) {
   write({
     kind: "turn.end",
@@ -227,6 +273,8 @@ export function turnEnd(input: {
     agent: input.agent,
     outcome: input.outcome,
     error: input.error,
+    turnNumber: input.turnNumber,
+    resumed: input.resumed,
   })
 }
 

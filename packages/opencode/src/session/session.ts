@@ -444,6 +444,17 @@ export interface Interface {
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
   readonly setShare: (input: { sessionID: SessionID; share: Info["share"] }) => Effect.Effect<void>
   readonly setWorkspace: (input: { sessionID: SessionID; workspaceID: Info["workspaceID"] }) => Effect.Effect<void>
+  /**
+   * Re-point a session at a new directory and worktree. Used by the FreeCode
+   * isolation layer: an isolated subagent's files and history live in its
+   * worktree, and the session record must say so, or every later read of the
+   * session reports the parent's directory instead.
+   */
+  readonly setDirectory: (input: {
+    sessionID: SessionID
+    directory: string
+    path?: string
+  }) => Effect.Effect<void, NotFound>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
@@ -820,6 +831,26 @@ const layer: Layer.Layer<
       )
     })
 
+    const setDirectory = Effect.fn("Session.setDirectory")(function* (input: {
+      sessionID: SessionID
+      directory: string
+      path?: string
+    }) {
+      const row = yield* db
+        .update(SessionTable)
+        .set({
+          directory: input.directory,
+          ...(input.path !== undefined ? { path: input.path } : {}),
+          time_updated: Date.now(),
+        })
+        .where(eq(SessionTable.id, input.sessionID))
+        .returning({ id: SessionTable.id })
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* Effect.fail(new NotFoundError({ message: `Session not found: ${input.sessionID}` }))
+      yield* events.publish(SessionV1.Event.Updated, { sessionID: input.sessionID, info: yield* get(input.sessionID) })
+    })
+
     const diff = Effect.fn("Session.diff")(function* (sessionID: SessionID) {
       void sessionID
       return [] as Snapshot.FileDiff[]
@@ -920,6 +951,7 @@ const layer: Layer.Layer<
       setSummary,
       setShare,
       setWorkspace,
+      setDirectory,
       diff,
       messages,
       children,

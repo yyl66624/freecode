@@ -10,6 +10,7 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import { trimDiff } from "./edit"
 import { containsPath } from "../project/instance-context"
 import { Trace } from "@/freecode/trace"
+import { rewriteAbsolutePath } from "@/freecode/isolation"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import DESCRIPTION from "./apply_patch.txt"
@@ -56,11 +57,23 @@ export const ApplyPatchTool = Tool.define(
 
       const instance = yield* InstanceState.context
 
+      // P0-4: resolve every hunk path against the instance and, when the
+      // path points at the shared checkout, rewrite it into the subagent's
+      // worktree (phenomenon A). The rewrite is applied consistently to the
+      // trace, the permission check, and the write itself, so the patch
+      // cannot escape the isolation boundary even when the model names the
+      // parent's absolute paths.
+      const resolveHunk = (p: string) => {
+        const absolute = path.resolve(instance.directory, p)
+        const rewritten = rewriteAbsolutePath(instance.worktree, instance.directory, absolute)
+        return rewritten === absolute ? { filePath: absolute, rewritten: false } : { filePath: rewritten, rewritten: true }
+      }
+
       // Trace: record every file path this patch will touch, before any of
       // the writes happen, so the trace shows what was attempted even when
       // the patch is later rejected.
       for (const hunk of hunks) {
-        const hunkPath = path.resolve(instance.directory, hunk.path)
+        const { filePath: hunkPath, rewritten } = resolveHunk(hunk.path)
         Trace.toolResolve({
           sessionID: ctx.sessionID,
           messageID: ctx.messageID,
@@ -70,6 +83,7 @@ export const ApplyPatchTool = Tool.define(
           cwd: instance.directory,
           resolved: hunkPath,
           external: !containsPath(hunkPath, instance),
+          rewritten,
         })
       }
 
@@ -89,7 +103,7 @@ export const ApplyPatchTool = Tool.define(
       let totalDiff = ""
 
       for (const hunk of hunks) {
-        const filePath = path.resolve(instance.directory, hunk.path)
+        const { filePath } = resolveHunk(hunk.path)
         yield* assertExternalDirectoryEffect(ctx, filePath)
 
         switch (hunk.type) {
@@ -158,7 +172,7 @@ export const ApplyPatchTool = Tool.define(
               if (change.removed) deletions += change.count || 0
             }
 
-            const movePath = hunk.move_path ? path.resolve(instance.directory, hunk.move_path) : undefined
+            const movePath = hunk.move_path ? resolveHunk(hunk.move_path).filePath : undefined
             yield* assertExternalDirectoryEffect(ctx, movePath)
 
             fileChanges.push({

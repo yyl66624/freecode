@@ -1,8 +1,41 @@
 export * as Isolation from "./isolation"
 
 import * as Effect from "effect/Effect"
+import * as path from "path"
 import { Worktree } from "./worktree"
 import { Trace } from "./trace"
+
+/**
+ * Rewrite an absolute path from the shared checkout into the subagent's
+ * worktree, when it points at a file inside the repository.
+ *
+ * This is the fix for P0-1 root cause #1 (phenomenon A): a subagent's LLM
+ * frequently sees the parent's absolute file paths (from the task
+ * description, from parent-session tool results, or from its own reads)
+ * and passes them straight to a write tool. The write tool's
+ * `path.isAbsolute(params.filePath) ? params.filePath : join(...)` logic
+ * honours absolute paths as-is, so the write lands in the shared
+ * checkout even though the subagent is isolated.
+ *
+ * The rewrite maps `/repo/<relative>` -> `/repo/.freecode/worktrees/<id>/<relative>`
+ * (the worktree layout this very module creates) and is a no-op for any
+ * path that is not under the repository — those stay "external" and fall
+ * through to the `external_directory` permission ask, which is the
+ * pre-existing behaviour.
+ *
+ * Kept here, next to the isolation decision, because the repository and the
+ * worktree layout are the two facts that make the rewrite correct; the file
+ * tools call it without knowing either.
+ */
+export function rewriteAbsolutePath(repository: string, worktree: string, absolutePath: string): string {
+  const prefix = repository.endsWith(path.sep) ? repository : repository + path.sep
+  if (!absolutePath.startsWith(prefix)) return absolutePath
+  const relative = absolutePath.slice(prefix.length)
+  // Guard against escaping via `..` — a path that starts with `..` after the
+  // prefix is not a file inside the repository and is left external.
+  if (relative.startsWith("..")) return absolutePath
+  return path.join(worktree, relative)
+}
 
 /**
  * Decides whether one subagent needs its own worktree, and creates it.
@@ -42,6 +75,30 @@ export interface PrepareInput {
    * independent of any session-store lookup.
    */
   parentSessionID?: string
+  /**
+   * True when this run resumes an existing subagent session (`task_id` or a
+   * background extension) rather than starting a fresh one. Recorded on the
+   * trace `session` event so a reader can tell first-creation from resume
+   * reuse (P0-3 contract A2: `resumed` must come from the isolation
+   * decision, not default to false forever).
+   */
+  resumed?: boolean
+  /**
+   * 1-based turn ordinal within the subagent session, for the trace record.
+   * A resumed task is a new turn; the verdict joins turns by session id and
+   * uses the last `session` record's `worktree` for its judgment, so this
+   * ordinal is what keeps multi-turn sessions readable (P0-3 contract C1).
+   */
+  turnNumber?: number
+  /**
+   * The parent session's resolved directory and worktree, for the trace
+   * record. The parent's `InstanceRef` is what the subagent's file tools
+   * resolve against when the subagent is NOT isolated; recording it on the
+   * `session` event makes "the subagent ran in the shared checkout because
+   * of the parent instance" a one-line lookup in the trace.
+   */
+  parentDirectory?: string
+  parentWorktree?: string
 }
 
 /**
@@ -62,6 +119,13 @@ export interface Result {
   worktree?: string
   branch?: string
   reason?: string
+  /**
+   * Set when the subagent was resumed (`task_id` or background extension):
+   * the worktree already exists and is reused, so the isolation decision is
+   * "reused the existing worktree" rather than "created a new one". The
+   * trace record carries the same flag on its `session` event.
+   */
+  resumed?: boolean
 }
 
 /**
@@ -105,11 +169,15 @@ export const prepare = Effect.fn("FreeCode.Isolation.prepare")(function* (input:
       sessionID: input.sessionID,
       parentSessionID: input.parentSessionID,
       agent: input.agent,
+      resumed: input.resumed ?? false,
+      turnNumber: input.turnNumber,
       mode: "shared",
       reason,
       model: input.model,
+      parentDirectory: input.parentDirectory,
+      parentWorktree: input.parentWorktree,
     })
-    return { mode: "shared" as const, reason }
+    return { mode: "shared" as const, reason, resumed: input.resumed }
   }
 
   const info = yield* Effect.promise(() => Worktree.create({ repository: input.repository, id: input.sessionID }))
@@ -128,11 +196,15 @@ export const prepare = Effect.fn("FreeCode.Isolation.prepare")(function* (input:
       sessionID: input.sessionID,
       parentSessionID: input.parentSessionID,
       agent: input.agent,
+      resumed: input.resumed ?? false,
+      turnNumber: input.turnNumber,
       mode: "fallback",
       reason: fallbackReason,
       model: input.model,
+      parentDirectory: input.parentDirectory,
+      parentWorktree: input.parentWorktree,
     })
-    return { mode: "fallback" as const, reason: fallbackReason }
+    return { mode: "fallback" as const, reason: fallbackReason, resumed: input.resumed }
   }
 
   yield* Effect.logInfo("freecode isolated subagent", {
@@ -144,17 +216,22 @@ export const prepare = Effect.fn("FreeCode.Isolation.prepare")(function* (input:
     sessionID: input.sessionID,
     parentSessionID: input.parentSessionID,
     agent: input.agent,
+    resumed: input.resumed ?? false,
+    turnNumber: input.turnNumber,
     mode: "isolated",
     directory: info.directory,
     worktree: info.directory,
     branch: info.branch,
     model: input.model,
+    parentDirectory: input.parentDirectory,
+    parentWorktree: input.parentWorktree,
   })
   return {
     mode: "isolated" as const,
     directory: info.directory,
     worktree: info.directory,
     branch: info.branch,
+    resumed: input.resumed,
   }
 })
 

@@ -15,6 +15,7 @@ import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { containsPath } from "../project/instance-context"
 import { Trace } from "@/freecode/trace"
+import { rewriteAbsolutePath } from "@/freecode/isolation"
 import * as Bom from "@/util/bom"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -40,18 +41,30 @@ export const WriteTool = Tool.define(
       execute: (params: { content: string; filePath: string }, ctx: Tool.Context) =>
         Effect.gen(function* () {
           const instance = yield* InstanceState.context
-          const filepath = path.isAbsolute(params.filePath)
-            ? params.filePath
-            : path.join(instance.directory, params.filePath)
+          // P0-4: an isolated subagent's InstanceRef points at its worktree,
+          // but the LLM still hands out the parent's absolute paths. Rewriting
+          // paths that point into the shared checkout keeps the write inside
+          // the worktree instead of escaping it (phenomenon A).
+          const inputPath = params.filePath
+          let filepath = path.isAbsolute(params.filePath) ? params.filePath : path.join(instance.directory, params.filePath)
+          let rewritten = false
+          if (path.isAbsolute(filepath) && filepath !== instance.directory) {
+            const target = rewriteAbsolutePath(instance.worktree, instance.directory, filepath)
+            if (target !== filepath) {
+              filepath = target
+              rewritten = true
+            }
+          }
           Trace.toolResolve({
             sessionID: ctx.sessionID,
             messageID: ctx.messageID,
             callID: ctx.callID,
             tool: "write",
-            inputPath: params.filePath,
+            inputPath,
             cwd: instance.directory,
             resolved: filepath,
             external: !containsPath(filepath, instance),
+            rewritten,
           })
           yield* assertExternalDirectoryEffect(ctx, filepath)
 
