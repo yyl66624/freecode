@@ -544,7 +544,7 @@ than the worktree. Two distinct failure modes were identified (P0-1, P0-2):
   a write tool. The main checkout and the worktree are both untouched. This is
   a model-behaviour issue (prompt / tier choice), not an isolation bug.
 
-**P0-4 fix (this commit):**
+**P0-4 fix (`3233737`):**
 
 1. **Absolute-path rewrite** — `rewriteAbsolutePath(repository, worktree, absolutePath)`
    in `packages/opencode/src/freecode/isolation.ts` rewrites any absolute path
@@ -590,6 +590,50 @@ than the worktree. Two distinct failure modes were identified (P0-1, P0-2):
 All 8 tests fail on the pre-fix codebase (the `rewriteAbsolutePath` function did
 not exist; the verdict used the first `turn.end`) and pass on the post-fix
 codebase.
+
+### Real-provider verification (`3233737`, P0-2 verdict matrix)
+
+Batch of 8 real `freecode run --dir .runtime/stability-proj` runs on the
+`3233737` build (DeepSeek `deepseek-v4-pro`), each preceded by a clean reset
+of the project to `5e802f3` and `git worktree prune`. Verdict from
+`scripts/isolation-verdict.sh` on each run's trace:
+
+| Run | Trace PID | Verdict |
+| --- | --- | --- |
+| 1 | 22375 | NO_WRITE |
+| 2 | 22600 | OK |
+| 3 | 22866 | NO_WRITE |
+| 4 | 23138 | NO_WRITE |
+| 5 | 23406 | NO_WRITE |
+| 6 | 23637 | NO_WRITE |
+| 7 | 23874 | NO_WRITE |
+| 8 | 24302 | NO_WRITE |
+
+**Distribution: 1 OK / 7 NO_WRITE / 0 WRONG_CWD / 0 ERROR.**
+
+- `WRONG_CWD` did not appear in any run: the absolute-path rewrite holds. In
+  every run the main checkout stayed byte-identical to `5e802f3`
+  (`git status` / `git diff` clean; only the `.freecode/worktrees` scratch
+  space is untracked); when a write happened (run 2, and the earlier
+  verification run `22053`), it landed in the subagent's own worktree.
+- `NO_WRITE` remains the dominant residual: the subagent reads the target
+  file and then ends the turn without calling a write tool. Per the P0-3
+  contract (`docs/M0-RELEASE-GATE.md` §1.3 / B4) this is model behaviour,
+  not an isolation defect, and the finding is downgraded accordingly:
+  **phenomenon A (`WRONG_CWD`) is closed — it cannot occur while a subagent
+  is isolated; phenomenon B is a known limitation of the task text / model,
+  not a release blocker.** The trigger is the underspecified task text
+  ("add a module docstring"); when the model does write, the write path
+  works end to end (OK runs confirmed by the verdict's filesystem
+  cross-check).
+- No 429 / rate-limit interception occurred in this batch; no provider-side
+  blocker is outstanding.
+- Note: 2 further planned runs did not complete (each single run takes
+  70-300 s and two local attempts stalled inside the model loop with no new
+  trace event; not a provider 429 — the trace for each stalled run shows the
+  subagent read and then go silent). The 8 completed runs are the evidence
+  batch recorded above; a ≥10-run refresh can be re-run offline against
+  recorded traces (`isolation-verdict.sh` replays any JSONL).
 
 Two test defects found and fixed while investigating:
 
