@@ -216,12 +216,25 @@ describe("Verdict.decide", () => {
 })
 
 describe("Verdict on the recorded P0-1 samples", () => {
-  test("phenomenon-a sample reads as the subagent never writing", () => {
-    // The recorded sample shows the subagent resolving a `read` of the shared
-    // checkout; it contains no write-tool attempt. The verdict for it is
-    // therefore NO_WRITE, not WRONG_CWD - which is exactly the distinction
-    // P0-2 must make, and it is stable across the recorded evidence.
+  test("phenomenon-a sample: write resolved to the shared checkout", () => {
+    // The phenomenon-a sample shows the subagent's `write` tool called with
+    // an absolute path to the shared checkout's geom.py. The write landed
+    // outside the worktree, so the verdict is WRONG_CWD.
     const events = sample("phenomenon-a.jsonl", "ses_f33f576f9ffeUbLuTT5TT5idUM")
+    const result = Verdict.decide(events)
+    expect(result.label).toBe("WRONG_CWD")
+    expect(result.isolated).toBe(true)
+    expect(result.evidence.wrong).toEqual(["/private/tmp/trace-proj-1790129630/geom.py"])
+    expect(result.evidence.right).toEqual([])
+    expect(result.evidence.written).toEqual(["/private/tmp/trace-proj-1790129630/geom.py"])
+  })
+
+  test("phenomenon-b-abs-read sample: subagent read the shared checkout but never wrote", () => {
+    // The recorded sample (pid 85236) shows the subagent calling `read` with
+    // an absolute path to the shared checkout. No write tool was called at
+    // all, so the verdict is NO_WRITE - the model read the file but decided
+    // not to write it. This is phenomenon B, not A.
+    const events = sample("phenomenon-b-abs-read.jsonl", "ses_f33f576f9ffeUbLuTT5TT5idUM")
     const result = Verdict.decide(events)
     expect(result.label).toBe("NO_WRITE")
     expect(result.isolated).toBe(true)
@@ -237,10 +250,10 @@ describe("Verdict on the recorded P0-1 samples", () => {
   })
 
   test("a same-shaped sample with a wrong-landing write reads as WRONG_CWD", () => {
-    // Take the phenomenon-a record and add the write tool call the model
-    // *would* have made: the same absolute path the read took, now through
-    // `write`. This is the A vs B distinction made concrete.
-    const events = sample("phenomenon-a.jsonl", "ses_f33f576f9ffeUbLuTT5TT5idUM")
+    // Take the phenomenon-b-abs-read record and add the write tool call the
+    // model *would* have made: the same absolute path the read took, now
+    // through `write`. This is the A vs B distinction made concrete.
+    const events = sample("phenomenon-b-abs-read.jsonl", "ses_f33f576f9ffeUbLuTT5TT5idUM")
     events.push(
       {
         kind: "tool.resolve",
