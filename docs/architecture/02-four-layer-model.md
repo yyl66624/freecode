@@ -116,30 +116,49 @@ interface ResourceBinding {
 
 > 模板内置于 FreeCode 包中（`provider-templates.json`）；用户配置只做**覆盖与追加**，不改写模板。模型版本号会过期，模板标注「以官方为准」，用户可用 `models[]` 覆盖。
 
-## 4. ResourceResolver（P1 挂载点的对外契约）
+## 4. 资源解析契约（P1 挂载点，对照 `route.ts` 实际实现）
+
+> **修订说明（FREE-2 打回修复 ②）**：本节原定义了 `ResourceResolver.resolve(req, ctx)` 契约；`opencode-dev` 现状已把它实现为 `route.ts` 的 `Route.auto(providerID, modelID, registry)` 工厂 + `resolver.ts` 的 `ModelResolver.resolve(input)` 三段式（`fixed` → `tier` → `auto`），并叠加调度器 `Scheduler.rank`。本节以现状为准重写，原接口形态作为**被取代的早期设计**保留在文末对照表，FREE-15 契约摇摆按本节的「现状 seam」口径定案。
+
+### 4.1 现状 seam：`Route.auto`
 
 ```ts
-interface ResourceResolver {
-  /** 按任务需求解析出本轮 LLM 调用资源。纯函数式接口，副作用全在实现内部。 */
-  resolve(req: ResolveRequest, ctx: ResolveContext): Promise<ResourceBinding>;
-}
-
-interface ResolveRequest {
-  capability: CapabilityTier;      // 来自 Agent 声明或任务分类器
-  requiredFeatures: string[];      // 例: ["tools"] / ["long-context"]
-  modelOverride?: string;          // 用户手动指定（最高优先级）
-}
-
-interface ResolveContext {
-  sessionKey: string;             // 粘性路由键（见 03 文档 §4.2）
-  history?: RecentStats[];        // 可选：调度器注入的近期观测
-}
-
-// resolve 的语义（与 03 文档一致）：
-// 1) modelOverride 存在且可解析 → 直接用（仍校验 account 可用性，不可用则报错并提示 /account）
-// 2) 否则 → 调度器按六维评分选 (model, account)
-// 3) 全部不可用 → 抛 NoResourceError（03 文档 §5 定义了 CLI 的兜底展示）
+// packages/opencode/src/freecode/route.ts
+export function auto(
+  providerID: ProviderV2.ID,
+  modelID: ModelV2.ID,
+  registry: Registry,
+): Effect.Effect<ResolvedModel | undefined>
 ```
+
+- **触发**：`getModel` 收到 sentinel 对（`freecode/auto` 或 `freecode` + 空 modelID，见 `isSentinel`）时才进入；普通 `provider/model` 引用直接走原生 `lookup`，**字节级兼容既有 OpenCode 配置**。
+- **三段式语义**（`resolver.ts`）：
+  1. `fixed`：`requested` 非 `auto` → 用户显式指定永远胜出，绝不二次猜测；
+  2. `tier`：Agent 声明 capability 档位（`Tier = "local"|"fast"|"standard"|"strong"|"max"`，`TIERS` 弱到强有序）→ 取满足档位的最优资源；
+  3. `auto`：路由器对任务分类，档位随分类结果而定。
+- **选资源**：`Scheduler.rank(candidates, { tier })` 在 hard filter（tier + capability）之后做六维评分，`ranking[0]` 为胜者；胜者经 `registry.get(provider, model)` 解析成已注册模型。
+- **无资格候选 / 无 routing context**：都落到 `registry.fallback`（调用方传入的 `firstAvailableModel(snapshot)`）——这是**状态而非错误**：会话保留本会使用的默认模型，不崩溃、不静默换模型。`route.ts` 在此路径仍 `Decision.write(...)` 写 `last-route.json`，保证「为什么没用上池子」也可审计。
+- **seam 失败可换**：`replacementFor(failed, tier, attempts, registry)` 对已失败的那次调用做**同级 failover**（不重新分类，复用该 turn 已提交的 tier，排除刚失败的候选；见 `fallback.ts` 的 `plan`），上游 retry/halt 路径保持原样。
+
+### 4.2 契约不变式（对 FREE-15 实现者的约束）
+
+- 唯一入口：所有 model 决策必须经 `Route.auto`，Task 工具 / agent registry / TUI / provider 层不得各自路由（`resolver.ts` 文件头注释的不变式）。
+- 类型循环规避：`ResolvedModel` 刻意是**结构化最小接口**（`id`/`providerID`/`capabilities?`/`cost?`），不 import `Provider.Model`——否则 `getModel`↔`auto` 的类型循环会塌缩成 `any`，在最重要的 seam 上静默关闭检查。实现者不得为「方便」把该接口改回 `Provider.Model`。
+- 副作用收敛：`resolve` 是纯判定（分类 + 评分），副作用（写 `state.json`/`last-route.json`）集中在 `Decision.write` 与 `core/metrics.ts`，便于单测与审计重放。
+
+### 4.3 早期设计形态（已被现状取代，仅存档）
+
+早期草案的 `ResourceResolver`（`resolve(req: ResolveRequest, ctx: ResolveContext) → ResourceBinding`，`ResolveRequest` 含 `capability`/`requiredFeatures`/`modelOverride`）是**接口草案**，其意图已被现状吸收：
+
+| 草案字段 | 现状对应 | 去向 |
+| --- | --- | --- |
+| `capability` 档位 | `resolver.ts` 的 `Tier` + `ResolveInput.tier` | 保留，改名为 `Tier`，弱到强 5 档（local/fast/standard/strong/max）取代原 4 档（light/standard/deep/expert） |
+| `modelOverride` | `ResolveInput.requested`（`fixed` 段） | 保留，语义一致 |
+| `requiredFeatures` | `capabilities` hard filter（`pool.ts`） | 保留，并入调度器 |
+| `ctx.sessionKey`（粘性路由） | `RoutingRef`（`context.ts`）+ `sessions` 存 `state.json` | 保留 |
+| 返回 `ResourceBinding` | 返回 `ResolvedModel`（结构化最小接口） | 改：不再返回 Account 实体，Account 在 `ResourceStore` 注册期解析 |
+
+> FREE-15 实现契约以 §4.1/§4.2 现状口径为准；若需回退到草案形态（例如为多 Account 并发引入 `ResourceBinding` 返回），须先补 ADR-002 修订。
 
 ## 5. 切换与降级语义
 
