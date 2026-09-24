@@ -1,7 +1,7 @@
 # FreeCode 安装、快速开始与故障排查（RC）
 
-> 适用版本：v0.4.0（`934475c` 及之后）。本文档中所有命令均在 darwin-arm64 上
-> 对 `934475c` 构建实跑验证；输出为真实运行结果（敏感 key 已省略）。
+> 适用版本：v0.4.0（当前 `freecode-main`，`3233737` 及之后）。本文档中所有命令均在 darwin-arm64 上
+> 对 `3233737` 构建实跑验证；输出为真实运行结果（敏感 key 已省略）。
 > 交付项：P0-7（FREE-10）+ 并入的 FREE-19 剩余章节（README 指向 / 配置手册 / 调度器用户说明）。
 
 ---
@@ -20,10 +20,8 @@
 
 不装 Python 也能用：FreeCode 退化为纯规则路由（见 doctor 输出的说明）。
 
-> 已知环境行为：`routes` / `doctor` 的候选池总是包含一组内置演示账号
-> （`broken/deepseek-chat` 与 `deepseek/deepseek-flash`、`deepseek/deepseek-v4-pro`），
-> 它们来自二进制内置 catalog，不随你的配置消失，也无需为其配 key——
-> 它们存在的目的是让六维调度行在干净机器上也有可看的样本。
+> 说明：如果你在本仓库的工作副本里运行，`.runtime/config` 下可能还有 failover 测试夹具
+> （如 `broken/deepseek-chat`），它只存在于开发机本地，干净机器上不会出现。
 
 ---
 
@@ -45,7 +43,7 @@ cd packages/opencode
 bun run package          # 产物 dist/freecode-<platform>/bin/freecode
 ```
 
-实跑输出（`934475c`，darwin-arm64）：
+实跑输出（`3233737`，darwin-arm64）：
 
 ```
 $ bun run package
@@ -154,26 +152,24 @@ TUI 里发一个任务（Head Agent 自动按 tier 路由）：
 freecode routes why        # 最近一次路由的完整解释
 ```
 
-实跑输出（`0cdc7ef` 构建，干净安装后跑 §2 的 DeepSeek 流程；`routes` 同时列出内置演示账号，见 §0 说明）：
+实跑输出（`3233737` 构建，干净 HOME 从零安装后跑 §2 的 DeepSeek 流程）：
 
 ```
 $ freecode routes
 Resources
-  broken/deepseek-chat
-    account default   tiers standard strong max   cost 1.00   health unseen
-  deepseek/deepseek-flash
-    account default   tiers local fast   cost 1.20   health unseen
-  deepseek/deepseek-v4-pro
-    account default   tiers standard strong max   cost 1.74   health unseen
   deepseek/deepseek-chat          ← 你刚 setup 的账号
     account default   tiers standard strong max   cost 1.00   health unseen
 
 Current choice per tier
-  standard  deepseek/deepseek-chat score=0.570 (capability=0.50 quota=0.50 health=0.75 latency=0.50 reliability=0.50 cost=0.83)
-  （local / fast 未配置，回落到会话默认模型；strong / max 同 standard 行；
-   `routes tiers` 里 local/fast 显示为 `(unconfigured)`）
+  local     no eligible resource
+  fast      no eligible resource
+  standard  deepseek/deepseek-chat score=0.570 (capability=0.50 quota=0.50 health=0.75 latency=0.50 reliability=0.50 cost=0.90)
+  strong    deepseek/deepseek-chat score=0.570 (capability=0.50 quota=0.50 health=0.75 latency=0.50 reliability=0.50 cost=0.90)
+  max       deepseek/deepseek-chat score=0.570 (capability=0.50 quota=0.50 health=0.75 latency=0.50 reliability=0.50 cost=0.90)
 
 $ freecode routes tiers
+local     (unconfigured)
+fast      (unconfigured)
 standard  deepseek/deepseek-chat
 strong    deepseek/deepseek-chat
 max       deepseek/deepseek-chat
