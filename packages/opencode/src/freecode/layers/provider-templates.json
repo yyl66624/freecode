@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "comment": "Built-in provider templates, docs/architecture/02 §3. Users only OVERRIDE or APPEND; model versions may go stale — treat as 'check the vendor' defaults.",
+  "providers": [
+    {
+      "id": "minimax",
+      "vendor": "MiniMax",
+      "protocol": "openai-chat",
+      "endpoint": "https://api.minimaxi.com/v1/chat/completions",
+      "auth": "bearer",
+      "health": { "method": "GET", "path": "/models" },
+      "models": ["abab-6.5s-chat", "MiniMax-M1"],
+      "accounts": ["minimax"]
+    },
+    {
+      "id": "zhipu",
+      "vendor": "GLM (Zhipu)",
+      "protocol": "openai-chat",
+      "endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "auth": "bearer",
+      "health": { "method": "GET", "path": "/models" },
+      "models": ["glm-4-flash", "glm-4-plus"],
+      "accounts": ["zhipu"],
+      "note": "glm-4-flash is the free tier and can cold-start without a key when the endpoint is open"
+    },
+    {
+      "id": "moonshot",
+      "vendor": "Kimi (Moonshot)",
+      "protocol": "openai-chat",
+      "endpoint": "https://api.moonshot.cn/v1/chat/completions",
+      "auth": "bearer",
+      "health": { "method": "GET", "path": "/models" },
+      "models": ["kimi-k2", "kimi-k2-turbo-preview"],
+      "accounts": ["moonshot"]
+    },
+    {
+      "id": "deepseek",
+      "vendor": "DeepSeek",
+      "protocol": "openai-chat",
+      "endpoint": "https://api.deepseek.com/v1/chat/completions",
+      "auth": "bearer",
+      "health": { "method": "GET", "path": "/models" },
+      "models": ["deepseek-chat", "deepseek-reasoner"],
+      "accounts": ["deepseek"],
+      "note": "Cost anchor: the default cheap model for the scheduler"
+    },
+    {
+      "id": "openai-compat",
+      "vendor": "Any OpenAI-compatible endpoint",
+      "protocol": "openai-chat",
+      "endpoint": "https://example.local/v1/chat/completions",
+      "auth": "bearer",
+      "models": [],
+      "accounts": ["openai-compat"],
+      "note": "Fill in endpoint, models and auth for enterprise gateways or self-hosted services; models[] is user-declared"
+    },
+    {
+      "id": "ollama",
+      "vendor": "Ollama (local)",
+      "protocol": "local-http",
+      "endpoint": "http://127.0.0.1:11434",
+      "auth": "none",
+      "health": { "method": "GET", "path": "/api/tags" },
+      "models": ["qwen2.5-coder:14b"],
+      "accounts": ["ollama"],
+      "note": "Local fallback for privacy scenarios; health probes /api/tags instead of /models"
+    }
+  ],
+  "models": [
+    { "id": "minimax/abab-6.5s-chat", "provider": "minimax", "tier": "standard" },
+    { "id": "minimax/MiniMax-M1", "provider": "minimax", "tier": "standard" },
+    { "id": "zhipu/glm-4-flash", "provider": "zhipu", "tier": "light", "free": true },
+    { "id": "zhipu/glm-4-plus", "provider": "zhipu", "tier": "deep" },
+    { "id": "moonshot/kimi-k2", "provider": "moonshot", "tier": "deep", "capabilities": ["long-context"] },
+    { "id": "moonshot/kimi-k2-turbo-preview", "provider": "moonshot", "tier": "standard" },
+    { "id": "deepseek/deepseek-chat", "provider": "deepseek", "tier": "standard", "costAnchor": true },
+    { "id": "deepseek/deepseek-reasoner", "provider": "deepseek", "tier": "expert", "capabilities": ["reasoning"] },
+    { "id": "ollama/qwen2.5-coder:14b", "provider": "ollama", "tier": "standard" }
+  ],
+  "accounts": [
+    { "id": "minimax", "provider": "minimax", "credential": "env:MINIMAX_API_KEY" },
+    { "id": "zhipu", "provider": "zhipu", "credential": "env:ZHIPU_API_KEY" },
+    { "id": "moonshot", "provider": "moonshot", "credential": "env:MOONSHOT_API_KEY" },
+    { "id": "deepseek", "provider": "deepseek", "credential": "env:DEEPSEEK_API_KEY" },
+    { "id": "openai-compat", "provider": "openai-compat", "credential": "env:OPENAI_COMPAT_API_KEY" },
+    { "id": "ollama", "provider": "ollama", "credential": "env:OLLAMA_HOST", "concurrency": 1 }
+  ]
+}
