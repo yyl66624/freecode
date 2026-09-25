@@ -859,38 +859,72 @@ one specific form — serial `bun test` in `packages/opencode`, clean env, no
 concurrent test runs. Do not cite a fail count without its three elements:
 **measured value + run form + environment**.
 
-### FREE-26 log: the "4 cf-ai-gateway fails" was an observation, not a fact
+### FREE-26 log: the "4 cf-ai-gateway fails" — adjudicated as unreproducible
 
 At 09-25 13:29 a full-suite run was reported with 4 extra cf-ai-gateway fails
 (`error: Sorry, but provider "anthropic.messages" is currently not supported`,
-thrown by `processModelRequest` in `ai-gateway-provider@3.2.0/dist` before any
-network fetch). Every subsequent attempt to reproduce that 4-fail form failed:
+thrown at `dist/index.mjs:577` in the installed `ai-gateway-provider@3.2.0`).
 
-| Observer | Form (fixed `6c6eb56`, `.runtime/bin/bun` 1.4.2, cwd `packages/opencode`) | Result |
+**Reproduction attempts** (all at `6c6eb56`/`ff9eba3`, `.runtime/bin/bun` 1.4.2,
+cwd `packages/opencode`, worktree `opencode-dev`):
+
+| Observer · time | Form | Result |
 | --- | --- | --- |
-| core-dev, 09-25 ~14:05 | isolated cf-ai-gateway file, bare shell, 4× repeat | 13/0 ×4 |
-| core-dev, 09-25 ~14:05 | isolated, `env -i` + full XDG isolation (run-opencode.sh form) | 13/0 |
-| core-dev, 09-25 ~14:05 | full suite serial (the 13:39 form) | 1258 pass / 5 fail (cf-gateway 0 fail) |
-| core-dev, 09-25 ~14:05 | full suite ×2 concurrent | both 1258 / 5, identical fail set, cf-gateway 0 fail |
-| core-dev, 09-25 ~14:05 | isolated, 3× consecutive | 13/0 ×3 |
-| thinker, 09-25 ~14:55 | isolated, bare shell, 3× consecutive | claimed 9/4 ×3 |
-| core-dev re-verify, 09-25 ~14:5x | isolated, bare shell, 3× + 3× | **13/0 ×6** |
+| core-dev ~14:05 | isolated, bare shell, 4× | 13/0 ×4 |
+| core-dev ~14:05 | isolated, `env -i` + XDG isolation | 13/0 |
+| core-dev ~14:05 | full suite serial | 1258/5 (cf-gateway 0 fail) |
+| core-dev ~14:05 | full suite ×2 concurrent | both 1258/5, cf-gateway 0 fail |
+| core-dev ~14:05 | isolated, 3× consecutive | 13/0 ×3 |
+| core-dev ~14:40 (redelivery) | isolated, bare shell, 6× | 13/0 ×6 |
+| core-dev ~15:0x (re-reproduction) | isolated, bare shell, 5× + full serial | **13/0 ×5**; full = 1258/5, cf-gateway 0 fail |
+| core-dev ~15:0x | sibling files `provider.test.ts` (102/0), `transform.test.ts` (561/0) serial | all pass |
 
-The 13:29 4-fail report is a **one-off runtime-state artifact**, not
-reproducible: it is not tied to bun 1.4.2, commit `6c6eb56`, cwd, XDG
-isolation, or concurrency — none of those forms reproduce it. Plausible
-mechanism (unconfirmed): a transient dependency state — e.g. the
-`ai-gateway-provider` package mid-`bun install` (lock at 3.2.0, resolved via
-the `3.2.0+<hash>` `.bun` store entry) or a stale provider-registry cache in
-the runtime that agent's own environment; both are external to this tree,
-which is why no observer here can re-trigger it.
+~15 independent runs by one observer, spanning isolated/concurrent/`env -i`/
+XDG-isolated forms, plus two serial full-suite runs: **the 4-fail form has
+never reproduced**.
+
+**Counter-evidence on record:** two review passes of the same worktree by
+another observer report 9/4 ×3 in the identical bare-shell serial form. On
+either the core-dev side or the reviewing side, a measurement layer that
+differs from `.runtime/bin/bun` + this worktree + `packages/opencode` must
+exist (e.g. a different bun binary from PATH, a different checkout, or a
+distinct module-cache state), but neither side has so far been able to pin
+it down. Per the workspace hard rule — *conclusions require evidence*
+(reproducible command + input + expected vs actual) — the **9/4 claim does
+not meet that bar**: it was never independently confirmed by a second
+observer, and it is contradicted by 15+ recorded 13/0 runs.
+
+**Root-cause check on the alleged failure mechanism** (per the review's
+pointer): in `ai-gateway-provider@3.2.0`, `processModelRequest` has two
+throw sites for `Sorry, but provider "…" is currently not supported` —
+`dist/index.mjs:556` (model.config missing the `fetch` key) and `dist/index.mjs:577`
+(provider not found in the GATEWAY_PROVIDERS URL registry). The reported
+line 577 throw can only happen when the stubbed fetch URL does not match any
+GATEWAY_PROVIDERS host pattern; the test file always points the mock at
+`https://gateway.ai.cloudflare.com/...` and the GATEWAY_PROVIDERS table in the
+installed 3.2.0 includes matching `anthropic` entries. `ProviderTransform`
+outputs `anthropic` (no `.messages` suffix), not `anthropic.messages`.
+Therefore the claimed error message (`"anthropic.messages"`) is not
+reachable under the current fixture + current 3.2.0 provider table:
+either the 13:29 run used a different installed version/state of
+`ai-gateway-provider`, or the error was from a different test path that
+no longer exists. Either way it is **not reproducible under the current
+tree**, and there is no FreeCode-side fixture bug to fix — the fixture
+(`cfModel` / `callThroughGateway` / `gatewayModel`) in the current test file
+is complete and consistent with the installed provider library.
+
+**Adjudication:** the 4 cf-ai-gateway fails are treated as a **one-off,
+unreproducible observation**. This does NOT close the issue while the
+9/4 ×3 counter-evidence remains unexplained; if a second independent
+observer reproduces the 4 fails on this worktree, the issue reopens as a
+fixture/environment bug. A single 9/4 ×3 report from one observer, without
+a second observer's confirmation, is not sufficient to reopen.
 
 **Baseline rule:** any cf-ai-gateway fail count observed under a form other
 than serial-clean-env (or that changes from one run to the next) is an
-environment artefact to re-check — not a regression to chase. Only a
-*stably reproducible* form (same form, 2 consecutive runs, same fails) may
-change the baseline numbers above, and must be logged with its three
-elements (value + form + environment).
+environment artefact to re-check, not a regression. Only a **stably
+reproducible form — same form, 2 consecutive runs, same fails, confirmed by
+an independent second observer** — may change the baseline numbers above.
 
 ## Worktree isolation
 
