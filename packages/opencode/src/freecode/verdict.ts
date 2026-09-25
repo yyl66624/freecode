@@ -22,6 +22,11 @@ import { contains as pathContains } from "@/util/filesystem"
  *   - `OK`          every write attempt resolved inside the subagent's own
  *                   worktree and the turn ended successfully.
  *   - `ERROR`       the turn ended in an error, or a tool call failed.
+ *   - `AUTH_FAILED` the turn ended in an error AND at least one write attempt
+ *                   resolved outside the subagent's worktree (or was stopped
+ *                   at the door by the guard rail). Distinguishes "the
+ *                   provider refused the request and the model tried to
+ *                   pollute the shared checkout" from a plain ERROR.
  *
  * The verdict is a function of the trace events only, so it can be driven by
  * recorded traces in tests without a provider and without a repository.

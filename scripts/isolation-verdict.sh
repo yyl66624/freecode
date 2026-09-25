@@ -41,12 +41,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --session)
       if [[ -z "${2:-}" ]]; then
-        echo "usage: $0 [--session <id>] <trace.jsonl> [expect:OK|WRONG_CWD|NO_WRITE|ERROR|any]" >&2
+        echo "usage: $0 [--session <id>] <trace.jsonl> [expect:OK|WRONG_CWD|NO_WRITE|ERROR|AUTH_FAILED|any]" >&2
         exit 2
       fi
       SESSION_ID="$2"; shift 2
       ;;
-    OK|WRONG_CWD|NO_WRITE|ERROR|any)
+    OK|WRONG_CWD|NO_WRITE|ERROR|AUTH_FAILED|any)
       EXPECT="$1"; shift
       ;;
     *)
@@ -58,7 +58,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$TRACE_FILE" || ! -f "$TRACE_FILE" ]]; then
-  echo "usage: $0 [--session <id>] <trace.jsonl> [expect:OK|WRONG_CWD|NO_WRITE|ERROR|any]" >&2
+  echo "usage: $0 [--session <id>] <trace.jsonl> [expect:OK|WRONG_CWD|NO_WRITE|ERROR|AUTH_FAILED|any]" >&2
   exit 2
 fi
 

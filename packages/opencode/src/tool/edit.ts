@@ -94,6 +94,24 @@ export const EditTool = Tool.define(
               rewritten = true
             }
           }
+          // FREE-25 guard rail: when the model hands back an absolute path that
+          // still points at the shared checkout (the rewrite missed it, e.g. the
+          // model reconstructed it from a 401 error message), refuse the edit
+          // before any disk I/O or permission ask.
+          const sharedPath = sharedCheckoutPath(instance, filePath)
+          if (sharedPath !== undefined) {
+            const error = new Error(
+              `edit refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
+            )
+            Trace.toolOutcome({
+              sessionID: ctx.sessionID,
+              callID: ctx.callID,
+              tool: "edit",
+              outcome: "permission",
+              error: error.message,
+            })
+            throw error
+          }
           Trace.toolResolve({
             sessionID: ctx.sessionID,
             messageID: ctx.messageID,
@@ -105,23 +123,6 @@ export const EditTool = Tool.define(
             external: !containsPath(filePath, instance),
             rewritten,
           })
-          // FREE-25 guard rail: refuse an edit that targets the shared checkout
-          // from inside an isolated subagent (the rewrite missed it, e.g. the
-          // model reconstructed the path from a 401 error message).
-          const sharedPath = sharedCheckoutPath(instance, filePath)
-          if (sharedPath !== undefined) {
-            const error = new Error(
-              `edit refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
-            )
-            Trace.toolOutcome({
-              sessionID: ctx.sessionID,
-              callID: ctx.callID,
-              tool: "edit",
-              outcome: "error",
-              error: error.message,
-            })
-            throw error
-          }
           yield* assertExternalDirectoryEffect(ctx, filePath)
 
           let diff = ""

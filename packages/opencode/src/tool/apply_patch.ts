@@ -96,11 +96,13 @@ export const ApplyPatchTool = Tool.define(
           const { filePath } = resolveHunk(hunk.path)
           const sharedPath = sharedCheckoutPath(instance, filePath)
           if (sharedPath !== undefined) {
+            // "permission" not "error": a guard-rail refusal is a denial, not
+            // an execution failure.
             Trace.toolOutcome({
               sessionID: ctx.sessionID,
               callID: ctx.callID,
               tool: "apply_patch",
-              outcome: "error",
+              outcome: "permission",
               error: `apply_patch refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
             })
             return yield* Effect.fail(

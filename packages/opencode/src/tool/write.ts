@@ -60,7 +60,26 @@ export const WriteTool = Tool.define(
           // the rewrite missed (e.g. reconstructed from a 401 error message).
           // Refuse with a permission-denial-style error so the trace records it
           // and the verdict says "stopped" instead of "polluted".
+          // FREE-25 guard rail: when the model hands back an absolute path that
+          // still points at the shared checkout (the rewrite missed it, e.g. the
+          // model reconstructed it from a 401 error message), refuse the write
+          // before any disk I/O. The refusal is recorded in the trace as a
+          // tool.outcome so the verdict can say "the write was stopped at the
+          // door", not "the write polluted the shared checkout".
           const sharedPath = sharedCheckoutPath(instance, filepath)
+          if (sharedPath !== undefined) {
+            const error = new Error(
+              `write refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
+            )
+            Trace.toolOutcome({
+              sessionID: ctx.sessionID,
+              callID: ctx.callID,
+              tool: "write",
+              outcome: "permission",
+              error: error.message,
+            })
+            return yield* Effect.fail(error)
+          }
           Trace.toolResolve({
             sessionID: ctx.sessionID,
             messageID: ctx.messageID,
@@ -72,19 +91,6 @@ export const WriteTool = Tool.define(
             external: !containsPath(filepath, instance),
             rewritten,
           })
-          if (sharedPath !== undefined) {
-            const error = new Error(
-              `write refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
-            )
-            Trace.toolOutcome({
-              sessionID: ctx.sessionID,
-              callID: ctx.callID,
-              tool: "write",
-              outcome: "error",
-              error: error.message,
-            })
-            return yield* Effect.fail(error)
-          }
           yield* assertExternalDirectoryEffect(ctx, filepath)
 
           const exists = yield* fs.existsSafe(filepath)

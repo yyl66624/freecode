@@ -284,3 +284,99 @@ describe("FREE-25: rewriteAbsolutePath invariant (P0-4 still holds)", () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Guard-rail trace contract: a refused write records outcome "permission"
+// (a denial, not an execution failure), and the verdict still treats it as
+// "stopped at the door" evidence for AUTH_FAILED on a 401 turn.
+// ---------------------------------------------------------------------------
+
+describe("FREE-25: guard-rail refusal trace contract", () => {
+  const SESSION: Trace.Event = {
+    kind: "session",
+    sessionID: "ses_child",
+    parentSessionID: "ses_parent",
+    agent: "coder",
+    mode: "isolated",
+    directory: "/private/tmp/proj/.freecode/worktrees/ses_child",
+    worktree: "/private/tmp/proj/.freecode/worktrees/ses_child",
+    branch: "freecode/ses_child",
+  } as Trace.Event
+
+  test("a write refused by the guard (outcome=permission, resolved outside worktree) + 401 turn → AUTH_FAILED", () => {
+    const events: Trace.Event[] = [
+      SESSION,
+      // The model hands the write tool the shared-checkout absolute path; the
+      // guard rail records a tool.resolve (resolved outside the worktree) and
+      // then a tool.outcome with outcome "permission" (a denial, not an
+      // execution failure). No byte reaches the shared checkout.
+      {
+        kind: "tool.resolve",
+        sessionID: "ses_child",
+        tool: "write",
+        inputPath: "/private/tmp/proj/geom.py",
+        cwd: "/private/tmp/proj/.freecode/worktrees/ses_child",
+        resolved: "/private/tmp/proj/geom.py",
+        external: true,
+      } as Trace.Event,
+      {
+        kind: "tool.outcome",
+        sessionID: "ses_child",
+        tool: "write",
+        outcome: "permission",
+        error: "write refused: path '/private/tmp/proj/geom.py' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent",
+      } as Trace.Event,
+      {
+        kind: "turn.end",
+        sessionID: "ses_child",
+        parentSessionID: "ses_parent",
+        agent: "coder",
+        outcome: "error",
+        error: "401 Unauthorized: Your api key is invalid",
+      } as Trace.Event,
+    ]
+    const verdict = Verdict.decide(events)
+    // The write was refused (not executed), but the *attempt* targeted the
+    // shared checkout — that is the isolation signal the verdict must keep
+    // visible: AUTH_FAILED, not a bare ERROR that hides where the model
+    // tried to write.
+    expect(verdict.label).toBe("AUTH_FAILED")
+    expect(verdict.isolated).toBe(true)
+  })
+
+  test("a write refused by the guard but resolved inside the worktree + 401 turn → plain ERROR", () => {
+    const events: Trace.Event[] = [
+      SESSION,
+      {
+        kind: "tool.resolve",
+        sessionID: "ses_child",
+        tool: "write",
+        inputPath: "geom.py",
+        cwd: "/private/tmp/proj/.freecode/worktrees/ses_child",
+        resolved: "/private/tmp/proj/.freecode/worktrees/ses_child/geom.py",
+        external: false,
+      } as Trace.Event,
+      {
+        kind: "tool.outcome",
+        sessionID: "ses_child",
+        tool: "write",
+        outcome: "permission",
+        error: "edit permission denied",
+      } as Trace.Event,
+      {
+        kind: "turn.end",
+        sessionID: "ses_child",
+        parentSessionID: "ses_parent",
+        agent: "coder",
+        outcome: "error",
+        error: "401 Unauthorized",
+      } as Trace.Event,
+    ]
+    const verdict = Verdict.decide(events)
+    // The attempt targeted the subagent's own worktree — no isolation signal.
+    // The 401 is a plain provider error, not an isolation defect.
+    expect(verdict.label).toBe("ERROR")
+    expect(verdict.isolated).toBe(true)
+  })
+})
+
