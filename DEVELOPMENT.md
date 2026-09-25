@@ -854,6 +854,16 @@ Checking out the baseline commit directly does **not** work for this comparison:
 bun cannot resolve the workspace from that state and reports ~185 spurious
 failures. Stash the working tree, run the tests, then restore instead.
 
+The fail count is **run-form sensitive**: the numbers above are measured under
+one specific form — serial `bun test` in `packages/opencode`, clean env, no
+concurrent test runs. A concurrent `bun test` run observed the same 5 fails
+plus 4 more cf-ai-gateway fails (9 fail total); running the cf-ai-gateway file
+in isolation under the same conditions is 13/0 in every form tested. Do not
+cite a fail count without its three elements: **measured value + run form +
+environment**. (Logged FREE-26, 09-25: the 9-fail form could not be
+deterministically re-reproduced, so treat any cf-ai-gateway fail count outside
+serial-clean-env as an environment artefact to re-check, not a regression.)
+
 ## Worktree isolation
 
 OpenCode's permission system is not a sandbox, and two agents editing one checkout
