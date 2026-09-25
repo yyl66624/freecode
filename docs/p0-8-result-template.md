@@ -25,7 +25,7 @@
 | §0 | 环境 + stale-binary 门禁 |  | `version.sh check` 输出；SOURCE_HEAD= ; BUILD_SHA= | P0-5 门禁；fail 则整表作废 |
 | §1 | 安装 |  | `freecode --version` ; doctor 结尾行 | VERSION= |
 | §2 | 启动（非交互） |  | `config validate` 输出 |  |
-| §3 | setup Provider |  | setup / provider test / `ls -l ~/.freecode/secrets.env` | 明文泄漏 = 产品缺陷升级 |
+| §3 | setup Provider |  | setup / provider test / `ls -l ~/.freecode/secrets.env`（machine segments 走 `acceptance.sh` 时以 `$FREECODE_HOME/secrets.env` 为准，两处同目录不同表述） | 明文泄漏 = 产品缺陷升级 |
 | §4 | TUI 启动 |  | （人工）TUI 首屏截图或录屏片段 | 仅人可判 |
 | §5 | Head 分派 |  | `freecode tasks` 输出；task id= |  |
 | §6 | 路由可解释 |  | `freecode routes why` 全文；选定 model + tier= |  |
