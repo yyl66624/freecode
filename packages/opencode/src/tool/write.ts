@@ -15,7 +15,7 @@ import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { containsPath } from "../project/instance-context"
 import { Trace } from "@/freecode/trace"
-import { rewriteAbsolutePath, inIsolationWorktree, sharedCheckoutPath } from "@/freecode/isolation"
+import { rewriteAbsolutePath, inIsolationWorktree, refuseSharedCheckout } from "@/freecode/isolation"
 import * as Bom from "@/util/bom"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -82,36 +82,14 @@ export const WriteTool = Tool.define(
           // before any disk I/O. The refusal is recorded in the trace as a
           // tool.outcome so the verdict can say "the write was stopped at the
           // door", not "the write polluted the shared checkout".
-          const sharedPath = sharedCheckoutPath(instance, filepath)
-          // Record the resolve BEFORE the refusal (aligned with apply_patch,
-          // which traces every hunk up front). A refused write still carries
-          // its resolved path in the trace, so Verdict.decide's wouldResolve
-          // sees "a write would have landed outside the worktree" and a 401
-          // turn verdicts AUTH_FAILED instead of a bare ERROR.
-          if (sharedPath !== undefined) {
-            const error = new Error(
-              `write refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
-            )
-            Trace.toolResolve({
-              sessionID: ctx.sessionID,
-              messageID: ctx.messageID,
-              callID: ctx.callID,
-              tool: "write",
-              inputPath,
-              cwd: instance.directory,
-              resolved: sharedPath,
-              external: !containsPath(sharedPath, instance),
-              rewritten,
-            })
-            Trace.toolOutcome({
-              sessionID: ctx.sessionID,
-              callID: ctx.callID,
-              tool: "write",
-              outcome: "permission",
-              error: error.message,
-            })
-            return yield* Effect.fail(error)
-          }
+          // FREE-25 guard rail: when the model hands back an absolute path that
+          // still points at the shared checkout (the rewrite missed it, e.g.
+          // the model reconstructed it from a 401 error message), refuse the
+          // write before any disk I/O. The refusal is recorded in the trace as
+          // a tool.outcome so the verdict can say "the write was stopped at
+          // the door", not "the write polluted the shared checkout".
+          const guardError = refuseSharedCheckout(instance, filepath, ctx, "write", inputPath, rewritten)
+          if (guardError) return yield* Effect.fail(guardError)
           Trace.toolResolve({
             sessionID: ctx.sessionID,
             messageID: ctx.messageID,

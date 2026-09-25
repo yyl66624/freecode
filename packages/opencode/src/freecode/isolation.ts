@@ -100,6 +100,61 @@ export function sharedCheckoutPath(
 }
 
 /**
+ * Refuse a write whose target resolves into the shared checkout, for an
+ * isolated subagent.
+ *
+ * This is the FREE-25 guard rail (P0-8 §7): when the rewrite misses a
+ * shared-checkout path (e.g. the model reconstructs it from a 401 error
+ * message), the write is refused before any disk I/O. The refusal is
+ * recorded in the trace as a `tool.outcome` with `outcome: "permission"`
+ * (a denial, not an execution failure), so `Verdict.decide`'s
+ * `wouldResolve` sees "a write would have landed outside the worktree"
+ * and a 401 turn verdicts `AUTH_FAILED` instead of a bare `ERROR`.
+ *
+ * The resolve is recorded BEFORE the outcome (aligned with `apply_patch.ts`,
+ * which traces every hunk up front), so a refused write still carries its
+ * resolved path in the trace.
+ *
+ * Returns the error to throw/fail with, or `undefined` when the target is
+ * not a shared-checkout path (the write should proceed normally).
+ */
+export function refuseSharedCheckout(
+  instance: { directory: string; worktree: string },
+  filepath: string,
+  ctx: { sessionID: string; messageID?: string; callID?: string },
+  tool: string,
+  inputPath: string,
+  rewritten: boolean,
+): Error | undefined {
+  const sharedPath = sharedCheckoutPath(instance, filepath)
+  if (sharedPath === undefined) return undefined
+  const error = new Error(
+    `${tool} refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
+  )
+  // Lexical boundary check: a shared-checkout path is by definition outside
+  // the subagent's worktree, so `external` is always true here.
+  Trace.toolResolve({
+    sessionID: ctx.sessionID,
+    messageID: ctx.messageID,
+    callID: ctx.callID,
+    tool,
+    inputPath,
+    cwd: instance.directory,
+    resolved: sharedPath,
+    external: true,
+    rewritten,
+  })
+  Trace.toolOutcome({
+    sessionID: ctx.sessionID,
+    callID: ctx.callID,
+    tool,
+    outcome: "permission",
+    error: error.message,
+  })
+  return error
+}
+
+/**
  * Decides whether one subagent needs its own worktree, and creates it.
  *
  * Kept separate from the task tool so the decision is testable on its own and so

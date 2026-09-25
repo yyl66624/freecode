@@ -10,7 +10,7 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import { trimDiff } from "./edit"
 import { containsPath } from "../project/instance-context"
 import { Trace } from "@/freecode/trace"
-import { rewriteAbsolutePath, sharedCheckoutPath } from "@/freecode/isolation"
+import { rewriteAbsolutePath, refuseSharedCheckout } from "@/freecode/isolation"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import DESCRIPTION from "./apply_patch.txt"
@@ -91,26 +91,13 @@ export const ApplyPatchTool = Tool.define(
       // FREE-25 guard rail: refuse any hunk that targets the shared checkout
       // from inside an isolated subagent (the rewrite missed it, e.g. the
       // model reconstructed the path from a 401 error message).
+      // "permission" not "error": a guard-rail refusal is a denial, not an
+      // execution failure.
       {
         for (const hunk of hunks) {
-          const { filePath } = resolveHunk(hunk.path)
-          const sharedPath = sharedCheckoutPath(instance, filePath)
-          if (sharedPath !== undefined) {
-            // "permission" not "error": a guard-rail refusal is a denial, not
-            // an execution failure.
-            Trace.toolOutcome({
-              sessionID: ctx.sessionID,
-              callID: ctx.callID,
-              tool: "apply_patch",
-              outcome: "permission",
-              error: `apply_patch refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
-            })
-            return yield* Effect.fail(
-              new Error(
-                `apply_patch refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
-              ),
-            )
-          }
+          const { filePath, rewritten } = resolveHunk(hunk.path)
+          const error = refuseSharedCheckout(instance, filePath, ctx, "apply_patch", hunk.path, rewritten)
+          if (error) return yield* Effect.fail(error)
         }
       }
       const fileChanges: Array<{
