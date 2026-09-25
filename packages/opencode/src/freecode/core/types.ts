@@ -114,6 +114,8 @@ export interface ModelSpec {
   tier: CapabilityTier
   /** CNY/USD per million tokens. 0 (the default) means free or unknown. */
   costPerMtok?: { input: number; output: number; currency?: "CNY" | "USD" }
+  /** Official rate limits, when known. docs 02 §2.3. */
+  rate?: { rpm?: number; tpm?: number }
 }
 
 /** The candidate's provider, docs 02 §2.2. */

@@ -46,14 +46,14 @@ describe("four-layer schema validation", () => {
   })
 
   test("an invalid model spec with a bad tier is flagged", () => {
-    const bad: ModelSpec = {
+    const bad = {
       id: "p/m",
       provider: "p",
       contextWindow: 1,
       maxOutput: 1,
       capabilities: [],
       tier: "super-elite",
-    }
+    } as unknown as ModelSpec
     const entry = validateModel(bad)
     expect(entry.invalid).toBe(true)
     expect(entry.issues!.join()).toContain("tier")

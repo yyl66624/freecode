@@ -307,5 +307,3 @@ export const scenarios = {
     Object.fromEntries(keys.map((k) => [k, { failureRate: 1, failWith: "timeout" as const }])),
 } as const
 
-// The barrel consumers import: `import { MockProvider, scenarios, ... } from "@test/freecode/mock-provider"`.
-export type { MockProfile, FailureKind, CallResult }

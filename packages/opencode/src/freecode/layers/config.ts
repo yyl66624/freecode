@@ -110,7 +110,7 @@ export function merge(base: MergedConfig, override: MergedConfig): MergedConfig 
   const merged: MergedConfig = structuredClone(base)
 
   for (const [id, entry] of Object.entries(override.providers)) {
-    const target = entry.invalid ? entry : withProviderId(entry.value, id)
+    const target: Entry<ProviderSpec> = entry.invalid ? entry : { value: withProviderId(entry.value, id) as ProviderSpec, invalid: false }
     merged.providers[id] = target
   }
   for (const [id, entry] of Object.entries(override.models)) merged.models[id] = entry
