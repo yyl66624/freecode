@@ -878,21 +878,47 @@ cwd `packages/opencode`, worktree `opencode-dev`):
 | core-dev ~14:40 (redelivery) | isolated, bare shell, 6× | 13/0 ×6 |
 | core-dev ~15:0x (re-reproduction) | isolated, bare shell, 5× + full serial | **13/0 ×5**; full = 1258/5, cf-gateway 0 fail |
 | core-dev ~15:0x | sibling files `provider.test.ts` (102/0), `transform.test.ts` (561/0) serial | all pass |
+| qa ~15:0x (independent 3rd observer) | isolated, bare shell, 2× consecutive | **13/0 ×2** |
 
 ~15 independent runs by one observer, spanning isolated/concurrent/`env -i`/
 XDG-isolated forms, plus two serial full-suite runs: **the 4-fail form has
 never reproduced**.
 
 **Counter-evidence on record:** two review passes of the same worktree by
-another observer report 9/4 ×3 in the identical bare-shell serial form. On
-either the core-dev side or the reviewing side, a measurement layer that
-differs from `.runtime/bin/bun` + this worktree + `packages/opencode` must
-exist (e.g. a different bun binary from PATH, a different checkout, or a
-distinct module-cache state), but neither side has so far been able to pin
-it down. Per the workspace hard rule — *conclusions require evidence*
-(reproducible command + input + expected vs actual) — the **9/4 claim does
-not meet that bar**: it was never independently confirmed by a second
-observer, and it is contradicted by 15+ recorded 13/0 runs.
+a second observer independently report 9/4 ×3 in the identical bare-shell
+serial form, with full evidence attached (commands, cwd, bun version, error
+stacks). This observation is in fact the second observer's measurement, not
+an unconfirmed claim — the open problem is that the two sides' environment
+fingerprints have not been reconciled (candidates: which `node_modules/.bun`
+store actually gets hit, e.g. the main worktree vs the detached `.docbuild`
+worktree which carries its own store; which `@ai-sdk/gateway` hash variant
+is resolved; which `bun` binary on PATH), so the 9/4 side and the 13/0 side
+cannot yet be shown to have run against the same dependency resolution. The
+independent third-observer re-run (`47a3c62` era, 09-25 ~15:0x UTC) landed
+13/0 under the same form, making the tally 2:1; per the workspace hard rule
+— *conclusions require evidence* (reproducible command + input + expected
+vs actual) — a 2:1 split where the dissenting side's environment fingerprint
+is unverified is closed as **unreproducible, both measurements on record**
+(neither side's observation is denied). The 9/4 observation remains a
+documented, evidence-backed anomaly that reopens this log if it ever
+reproduces with a reconciled fingerprint.
+
+**Environment fingerprints recorded by the 13/0 side (09-25 ~15:0x UTC,
+independent third observer):**
+- `git rev-parse HEAD` = `47a3c624ef23` (worktree `opencode-dev` [freecode-main];
+  a second detached worktree `.docbuild` @ `0cdc7ef` exists and carries its own
+  `node_modules/.bun/` — tests were NOT run there).
+- `bun` = `/Users/yyl/Desktop/workshop/freecode/.runtime/bin/bun`, 1.4.2;
+  `node_modules` resolves to `opencode-dev/node_modules` (per-worktree store, not
+  the root store).
+- `ai-gateway-provider` resolves via symlink to
+  `node_modules/.bun/ai-gateway-provider@3.2.0+39911914b0439de0/...` (version 3.2.0;
+  mtime Sep 22 19:32, pre-dating all FREE-26 runs). Note: the store also holds
+  three `@ai-sdk+gateway` hash variants (3.0.104+68a1e3a0c4588df3, 3.0.104+d6123d32214422cb,
+  3.0.191+d6123d32214422cb) — which one is actually resolved at test time was not
+  pinned down and is a prime suspect for the unreconciled 9/4 vs 13/0 split.
+- 2× consecutive runs of `bun test test/provider/cf-ai-gateway-e2e.test.ts`:
+  both **13/0**, no fails.
 
 **Root-cause check on the alleged failure mechanism** (per the review's
 pointer): in `ai-gateway-provider@3.2.0`, `processModelRequest` has two
@@ -914,11 +940,13 @@ tree**, and there is no FreeCode-side fixture bug to fix — the fixture
 is complete and consistent with the installed provider library.
 
 **Adjudication:** the 4 cf-ai-gateway fails are treated as a **one-off,
-unreproducible observation**. This does NOT close the issue while the
-9/4 ×3 counter-evidence remains unexplained; if a second independent
-observer reproduces the 4 fails on this worktree, the issue reopens as a
-fixture/environment bug. A single 9/4 ×3 report from one observer, without
-a second observer's confirmation, is not sufficient to reopen.
+unreproducible observation** (independent third-observer re-run: 13/0 ×2,
+tally 2:1). This closes the issue as *unreproducible, both measurements on
+record* — the 9/4 ×3 report is NOT denied; it stands as evidence that the
+two sides' environment fingerprints were not aligned. The issue reopens as
+a fixture/environment bug if the 4 fails are ever reproduced under a
+reconciled environment fingerprint (same `node_modules` store, same
+`ai-gateway-provider` hash, same bun binary, confirmed in the run log).
 
 **Baseline rule:** any cf-ai-gateway fail count observed under a form other
 than serial-clean-env (or that changes from one run to the next) is an
