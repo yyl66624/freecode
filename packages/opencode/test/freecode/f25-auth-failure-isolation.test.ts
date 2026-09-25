@@ -286,9 +286,12 @@ describe("FREE-25: rewriteAbsolutePath invariant (P0-4 still holds)", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Guard-rail trace contract: a refused write records outcome "permission"
-// (a denial, not an execution failure), and the verdict still treats it as
-// "stopped at the door" evidence for AUTH_FAILED on a 401 turn.
+// Guard-rail trace contract: a refused write records the resolve FIRST (the
+// model's target path, which sits outside the worktree) and then outcome
+// "permission" (a denial, not an execution failure). All three write tools
+// (write / edit / apply_patch) share this shape, so the trace carries the
+// wrong-place signal that Verdict.decide's wouldResolve reads, and a 401
+// turn verdicts AUTH_FAILED instead of a bare ERROR.
 // ---------------------------------------------------------------------------
 
 describe("FREE-25: guard-rail refusal trace contract", () => {
@@ -303,13 +306,11 @@ describe("FREE-25: guard-rail refusal trace contract", () => {
     branch: "freecode/ses_child",
   } as Trace.Event
 
-  test("a write refused by the guard (outcome=permission, resolved outside worktree) + 401 turn → AUTH_FAILED", () => {
+  test("a write refused by the guard (resolve recorded BEFORE refusal, outcome=permission, resolved outside worktree) + 401 turn → AUTH_FAILED", () => {
     const events: Trace.Event[] = [
       SESSION,
-      // The model hands the write tool the shared-checkout absolute path; the
-      // guard rail records a tool.resolve (resolved outside the worktree) and
-      // then a tool.outcome with outcome "permission" (a denial, not an
-      // execution failure). No byte reaches the shared checkout.
+      // Production trace shape (write.ts / edit.ts / apply_patch.ts, post-fix
+      // trace order): resolve FIRST, refusal outcome SECOND.
       {
         kind: "tool.resolve",
         sessionID: "ses_child",
@@ -318,6 +319,7 @@ describe("FREE-25: guard-rail refusal trace contract", () => {
         cwd: "/private/tmp/proj/.freecode/worktrees/ses_child",
         resolved: "/private/tmp/proj/geom.py",
         external: true,
+        rewritten: true,
       } as Trace.Event,
       {
         kind: "tool.outcome",

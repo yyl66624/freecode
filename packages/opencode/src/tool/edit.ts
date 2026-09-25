@@ -93,16 +93,40 @@ export const EditTool = Tool.define(
               filePath = target
               rewritten = true
             }
+          } else if (!path.isAbsolute(params.filePath) && !containsPath(filePath, instance)) {
+            // P0-8 §7: same relative-path rewrite miss as write.ts (P0-4's
+            // rewriteAbsolutePath silently passes through when the joined path
+            // is inside the shared checkout).
+            const target = rewriteAbsolutePath(instance.worktree, instance.directory, filePath)
+            if (target !== filePath) {
+              filePath = target
+              rewritten = true
+            }
           }
           // FREE-25 guard rail: when the model hands back an absolute path that
           // still points at the shared checkout (the rewrite missed it, e.g. the
           // model reconstructed it from a 401 error message), refuse the edit
           // before any disk I/O or permission ask.
           const sharedPath = sharedCheckoutPath(instance, filePath)
+          // Record the resolve BEFORE the refusal (aligned with apply_patch).
+          // A refused edit still carries its resolved path in the trace, so
+          // Verdict.decide's wouldResolve sees the wrong-place signal and a
+          // 401 turn verdicts AUTH_FAILED instead of a bare ERROR.
           if (sharedPath !== undefined) {
             const error = new Error(
               `edit refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
             )
+            Trace.toolResolve({
+              sessionID: ctx.sessionID,
+              messageID: ctx.messageID,
+              callID: ctx.callID,
+              tool: "edit",
+              inputPath,
+              cwd: instance.directory,
+              resolved: sharedPath,
+              external: !containsPath(sharedPath, instance),
+              rewritten,
+            })
             Trace.toolOutcome({
               sessionID: ctx.sessionID,
               callID: ctx.callID,

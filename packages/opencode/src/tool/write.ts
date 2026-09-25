@@ -54,6 +54,21 @@ export const WriteTool = Tool.define(
               filepath = target
               rewritten = true
             }
+          } else if (!path.isAbsolute(params.filePath) && !containsPath(filepath, instance)) {
+            // P0-8 §7: P0-4's rewriteAbsolutePath is a pure string substitution
+            // that silently passes through when a path already begins with the
+            // instance's own worktree.  But a relative path the model hands in
+            // is resolved against the instance's shared-checkout cwd (the parent
+            // worktree's original directory), NOT the subagent's worktree.  If
+            // the join lands back in the shared checkout it needs the same
+            // rewrite as the absolute form, otherwise the guard rail below
+            // sees a shared-checkout path and refuses a write the model meant
+            // for its own worktree.  (Relative form of the P0-4 rewrite miss.)
+            const target = rewriteAbsolutePath(instance.worktree, instance.directory, filepath)
+            if (target !== filepath) {
+              filepath = target
+              rewritten = true
+            }
           }
           // FREE-25 guard rail: an isolated subagent must not be able to pollute
           // the shared checkout when the model hands back an absolute path that
@@ -67,10 +82,26 @@ export const WriteTool = Tool.define(
           // tool.outcome so the verdict can say "the write was stopped at the
           // door", not "the write polluted the shared checkout".
           const sharedPath = sharedCheckoutPath(instance, filepath)
+          // Record the resolve BEFORE the refusal (aligned with apply_patch,
+          // which traces every hunk up front). A refused write still carries
+          // its resolved path in the trace, so Verdict.decide's wouldResolve
+          // sees "a write would have landed outside the worktree" and a 401
+          // turn verdicts AUTH_FAILED instead of a bare ERROR.
           if (sharedPath !== undefined) {
             const error = new Error(
               `write refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
             )
+            Trace.toolResolve({
+              sessionID: ctx.sessionID,
+              messageID: ctx.messageID,
+              callID: ctx.callID,
+              tool: "write",
+              inputPath,
+              cwd: instance.directory,
+              resolved: sharedPath,
+              external: !containsPath(sharedPath, instance),
+              rewritten,
+            })
             Trace.toolOutcome({
               sessionID: ctx.sessionID,
               callID: ctx.callID,
