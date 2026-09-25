@@ -856,13 +856,41 @@ failures. Stash the working tree, run the tests, then restore instead.
 
 The fail count is **run-form sensitive**: the numbers above are measured under
 one specific form — serial `bun test` in `packages/opencode`, clean env, no
-concurrent test runs. A concurrent `bun test` run observed the same 5 fails
-plus 4 more cf-ai-gateway fails (9 fail total); running the cf-ai-gateway file
-in isolation under the same conditions is 13/0 in every form tested. Do not
-cite a fail count without its three elements: **measured value + run form +
-environment**. (Logged FREE-26, 09-25: the 9-fail form could not be
-deterministically re-reproduced, so treat any cf-ai-gateway fail count outside
-serial-clean-env as an environment artefact to re-check, not a regression.)
+concurrent test runs. Do not cite a fail count without its three elements:
+**measured value + run form + environment**.
+
+### FREE-26 log: the "4 cf-ai-gateway fails" was an observation, not a fact
+
+At 09-25 13:29 a full-suite run was reported with 4 extra cf-ai-gateway fails
+(`error: Sorry, but provider "anthropic.messages" is currently not supported`,
+thrown by `processModelRequest` in `ai-gateway-provider@3.2.0/dist` before any
+network fetch). Every subsequent attempt to reproduce that 4-fail form failed:
+
+| Observer | Form (fixed `6c6eb56`, `.runtime/bin/bun` 1.4.2, cwd `packages/opencode`) | Result |
+| --- | --- | --- |
+| core-dev, 09-25 ~14:05 | isolated cf-ai-gateway file, bare shell, 4× repeat | 13/0 ×4 |
+| core-dev, 09-25 ~14:05 | isolated, `env -i` + full XDG isolation (run-opencode.sh form) | 13/0 |
+| core-dev, 09-25 ~14:05 | full suite serial (the 13:39 form) | 1258 pass / 5 fail (cf-gateway 0 fail) |
+| core-dev, 09-25 ~14:05 | full suite ×2 concurrent | both 1258 / 5, identical fail set, cf-gateway 0 fail |
+| core-dev, 09-25 ~14:05 | isolated, 3× consecutive | 13/0 ×3 |
+| thinker, 09-25 ~14:55 | isolated, bare shell, 3× consecutive | claimed 9/4 ×3 |
+| core-dev re-verify, 09-25 ~14:5x | isolated, bare shell, 3× + 3× | **13/0 ×6** |
+
+The 13:29 4-fail report is a **one-off runtime-state artifact**, not
+reproducible: it is not tied to bun 1.4.2, commit `6c6eb56`, cwd, XDG
+isolation, or concurrency — none of those forms reproduce it. Plausible
+mechanism (unconfirmed): a transient dependency state — e.g. the
+`ai-gateway-provider` package mid-`bun install` (lock at 3.2.0, resolved via
+the `3.2.0+<hash>` `.bun` store entry) or a stale provider-registry cache in
+the runtime that agent's own environment; both are external to this tree,
+which is why no observer here can re-trigger it.
+
+**Baseline rule:** any cf-ai-gateway fail count observed under a form other
+than serial-clean-env (or that changes from one run to the next) is an
+environment artefact to re-check — not a regression to chase. Only a
+*stably reproducible* form (same form, 2 consecutive runs, same fails) may
+change the baseline numbers above, and must be logged with its three
+elements (value + form + environment).
 
 ## Worktree isolation
 
