@@ -1,0 +1,54 @@
+[1mFreeCode acceptance test[0m
+prefix /Users/yyl/Desktop/workshop/freecode/.runtime/tmp/freecode-acceptance.E28koj
+
+[1mPreflight: build SHA matches source HEAD[0m
+  [32m✓[0m version.sh check passed (build SHA == source HEAD)
+ok  source and constant agree: 0.4.0
+ok  binary reports 0.4.0 (contains source 0.4.0)
+ok  build SHA ced407e matches source HEAD ced407e (built from a dirty tree — HEAD is still authoritative)
+
+[1mBuild and install[0m
+  [32m✓[0m a current binary exists
+  [32m✓[0m install.sh completed
+  [32m✓[0m freecode is on the install path
+  [32m✓[0m the bridge was installed
+  [32m✓[0m a starter config was written
+  [32m✓[0m a starter agent was written
+  [32m✓[0m freecode --version reports 0.4.0
+  [32m✓[0m help names FreeCode
+
+[1mWorkspace and doctor[0m
+  [32m✓[0m doctor fails and names the missing pool
+  [32m✓[0m doctor reports the workspace it was pointed at
+
+[1mProvider setup[0m
+  [32m✓[0m setup saved a provider
+  [32m✓[0m the key file is mode 600
+  [32m✓[0m the config references the key file rather than inlining the key
+  [32m✓[0m the API key is not in the config file
+  [32m✓[0m doctor passes once a pool exists
+
+[1mA real task through model:auto[0m
+  [32m✓[0m routing ran: tier=standard
+  [32m✓[0m the scheduler chose a resource
+  [32m✓[0m the writing subagent was isolated into a worktree
+  [31m×[0m the main checkout was modified despite isolation
+  [31m×[0m the change is not in the worktree (the subagent may have failed to write)
+
+[1mReview and merge[0m
+  [31m×[0m the task is not listed
+  [31m×[0m merge reported success without merging: [93m[1mNot merged[0m   the repository has uncommitted changes; commit or stash them first 
+  [32m✓[0m the merged change is in the main checkout
+  [31m×[0m the worktree was left behind
+  isolation verdict trace: /Users/yyl/Desktop/workshop/freecode/.runtime/tmp/freecode-acceptance.E28koj/data/freecode/trace/63907.jsonl
+  [31m×[0m isolation verdict: ERROR (expected OK)
+
+[1mResumption[0m
+  [32m✓[0m a second run resumed the session
+
+[1mSummary[0m
+  21 passed, 6 failed, 0 skipped
+
+logs: /Users/yyl/Desktop/workshop/freecode/.runtime/tmp/freecode-acceptance.E28koj
+
+kept /Users/yyl/Desktop/workshop/freecode/.runtime/tmp/freecode-acceptance.E28koj for inspection
