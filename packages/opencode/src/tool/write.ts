@@ -55,15 +55,16 @@ export const WriteTool = Tool.define(
               rewritten = true
             }
           } else if (!path.isAbsolute(params.filePath) && !containsPath(filepath, instance)) {
-            // P0-8 §7: P0-4's rewriteAbsolutePath is a pure string substitution
-            // that silently passes through when a path already begins with the
-            // instance's own worktree.  But a relative path the model hands in
-            // is resolved against the instance's shared-checkout cwd (the parent
-            // worktree's original directory), NOT the subagent's worktree.  If
-            // the join lands back in the shared checkout it needs the same
-            // rewrite as the absolute form, otherwise the guard rail below
-            // sees a shared-checkout path and refuses a write the model meant
-            // for its own worktree.  (Relative form of the P0-4 rewrite miss.)
+            // P0-8 §7: relative form of the P0-4 rewrite miss.  A relative
+            // path the model hands in is joined against instance.directory
+            // (the shared-checkout cwd the task tool gives the subagent), not
+            // against the subagent's own worktree.  When the join lands back
+            // in the shared checkout — e.g. the model writes "geom.py" and
+            // join(repo_cwd, "geom.py") = repo/geom.py, outside the worktree
+            // — P0-4's absolute-only rewrite misses it, so the guard rail
+            // below refuses a write the model meant for its own worktree.
+            // Run the same rewrite: it moves the target into the worktree and
+            // the write succeeds there instead of being spuriously refused.
             const target = rewriteAbsolutePath(instance.worktree, instance.directory, filepath)
             if (target !== filepath) {
               filepath = target
