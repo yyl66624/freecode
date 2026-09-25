@@ -738,7 +738,34 @@ const layer = Layer.effect(
               },
             )
 
-            if (!replacement) return yield* Effect.fail(lastError)
+            // FREE-25: when the failover plan has no replacement AND the pool
+            // is fully exhausted (every candidate is excluded by the scheduler
+            // because its circuit is open / quota is zero / health is
+            // unavailable), stop instead of re-entering the retry loop. This
+            // is the "401 path" where a bad key was not yet rotated and a
+            // single account is in the pool: repeating the same request would
+            // just burn more 401s. The caller's `halt` handler records the
+            // final error and the session goes idle, which is what the
+            // acceptance run is looking for: "the provider refused the request
+            // and the subagent was not able to write anything (isolation
+            // context held)".
+            if (!replacement) {
+              // FREE-25: the 401 path. In a single-account pool, re-entering the
+              // retry loop with the same model just burns more 401s without
+              // ever recovering. Detect "the pool is fully excluded" (via the
+              // recorded circuit / quota state) and stop: `halt` below records
+              // the final error and the session goes idle, so the acceptance
+              // trace shows "the provider refused the request and the subagent
+              // was not able to write anything (isolation context held)".
+              const excludedAll = FreeCodeRoute.poolExcluded(cfg.freecode?.pool ?? {})
+              if (excludedAll) {
+                yield* Effect.logInfo("freecode fallback: pool exhausted, stopping instead of looping", {
+                  failed: `${model.providerID}/${model.id}`,
+                  attempts,
+                })
+              }
+              return yield* Effect.fail(lastError)
+            }
             // Branded ids are constructed here because the replacement comes back
             // as plain strings, the same way `parseModel` builds them.
             model = {

@@ -38,6 +38,68 @@ export function rewriteAbsolutePath(repository: string, worktree: string, absolu
 }
 
 /**
+ * True when this InstanceRef points at a FreeCode isolation worktree: the
+ * subagent's directory and worktree are the same path, and that path sits
+ * inside the repository's `.freecode/worktrees/` scratch space.
+ *
+ * Used by the write tools' guard rail (FREE-25): when an isolated subagent
+ * hands a write tool a path that still resolves into the *shared* checkout
+ * — i.e. the rewrite failed to catch it — the write is refused rather than
+ * allowed to pollute the shared checkout. The refusal is a permission error,
+ * so the trace records it and the verdict can say "the write was stopped",
+ * not "the write polluted the shared checkout".
+ *
+ * The check is purely lexical (no fs access) so it can run inside the write
+ * tool's hot path: directory === worktree is the shape the task tool gives
+ * an isolated subagent, and the marker below is where the worktrees are
+ * created. The `sep`-joined form catches both `/...` and `\...`.
+ */
+export function inIsolationWorktree(instance: { directory: string; worktree: string }): boolean {
+  if (instance.directory !== instance.worktree) return false
+  const marker = `${path.sep}.freecode${path.sep}worktrees${path.sep}`
+  const norm = instance.directory.replace(/^\/private(?=\/)/, "")
+  return norm.includes(marker)
+}
+
+/**
+ * True when `target` resolves into the shared repository that owns the
+ * subagent's isolation worktree, rather than into the worktree itself.
+ *
+ * This is the second half of the FREE-25 guard rail: an isolated subagent's
+ * InstanceRef points directory and worktree at the worktree, so the write
+ * tools cannot ask the instance "where is the shared checkout" directly. The
+ * shared repository is the parent directory of the `.freecode/worktrees/<id>`
+ * component in the worktree path, and any path under it that is NOT under
+ * the subagent's own worktree is shared-checkout territory. The write tool
+ * refuses such paths (a permission error) so that, even if the model
+ * reconstructs a shared-checkout absolute path from an error message, it
+ * cannot pollute the shared checkout from inside an isolated task.
+ *
+ * `undefined` when the instance is not an isolation worktree, or when the
+ * target does not sit under the shared repository — in which case the write
+ * is an external write and goes through the existing permission ask.
+ */
+export function sharedCheckoutPath(
+  instance: { directory: string; worktree: string },
+  target: string,
+): string | undefined {
+  if (!inIsolationWorktree(instance)) return undefined
+  const sep = path.sep
+  const marker = `${sep}.freecode${sep}worktrees${sep}`
+  const norm = (p: string) => p.replace(/^\/private(?=\/)/, "")
+  const worktree = norm(instance.directory)
+  const idx = worktree.lastIndexOf(marker)
+  if (idx === -1) return undefined
+  const repository = norm(worktree.slice(0, idx))
+  const normTarget = norm(target)
+  const insideWorktree =
+    normTarget === worktree || normTarget.startsWith(worktree + sep)
+  if (insideWorktree) return undefined
+  if (normTarget === repository || normTarget.startsWith(repository + sep)) return target
+  return undefined
+}
+
+/**
  * Decides whether one subagent needs its own worktree, and creates it.
  *
  * Kept separate from the task tool so the decision is testable on its own and so

@@ -3,9 +3,10 @@ export * as Route from "./route"
 import * as Effect from "effect/Effect"
 import { RoutingRef } from "./context"
 import { ModelPool } from "./pool"
+import { Fallback } from "./fallback"
+import { ResourceState, load, promote } from "./state"
 import { Resources } from "./resources"
 import { Scheduler } from "./scheduler"
-import { Fallback } from "./fallback"
 import { Decision } from "./decision"
 import type { Tier } from "./resolver"
 import { ModelResolver } from "./resolver"
@@ -260,6 +261,25 @@ function isSentinel(providerID: ProviderV2.ID, modelID: ModelV2.ID) {
  * then keeps its own behaviour, which is what preserves the upstream retry and
  * halt paths.
  */
+/**
+ * FREE-25: whether every eligible candidate in the pool is currently
+ * excluded (circuit open / quota exhausted / health unavailable). The caller
+ * uses this to decide whether a "no replacement" result from `replacementFor`
+ * means "the pool is fully exhausted — stop the failover loop" versus
+ * "just no better candidate for this one request — keep retrying". The
+ * distinction matters on the 401 path: in a single-account pool, looping
+ * means re-burning 401s forever; stopping hands the error to the caller's
+ * `halt` handler, which records it and lets the session go idle.
+ */
+export function poolExcluded(pool: Record<string, string[] | undefined>): boolean {
+  if (!pool) return false
+  const snapshot = promote(load())
+  const candidates = Resources.build({ pool, model: () => undefined, state: snapshot.resources })
+  if (candidates.length === 0) return false
+  const usable = candidates.filter((c) => ResourceState.usable(c.state))
+  return usable.length === 0
+}
+
 export const replacementFor = Effect.fn("FreeCode.Route.replacement")(function* (
   failed: ResolvedModel,
   tier: Tier,

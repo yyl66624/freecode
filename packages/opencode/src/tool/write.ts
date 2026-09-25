@@ -15,7 +15,7 @@ import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { containsPath } from "../project/instance-context"
 import { Trace } from "@/freecode/trace"
-import { rewriteAbsolutePath } from "@/freecode/isolation"
+import { rewriteAbsolutePath, inIsolationWorktree, sharedCheckoutPath } from "@/freecode/isolation"
 import * as Bom from "@/util/bom"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -55,6 +55,12 @@ export const WriteTool = Tool.define(
               rewritten = true
             }
           }
+          // FREE-25 guard rail: an isolated subagent must not be able to pollute
+          // the shared checkout when the model hands back an absolute path that
+          // the rewrite missed (e.g. reconstructed from a 401 error message).
+          // Refuse with a permission-denial-style error so the trace records it
+          // and the verdict says "stopped" instead of "polluted".
+          const sharedPath = sharedCheckoutPath(instance, filepath)
           Trace.toolResolve({
             sessionID: ctx.sessionID,
             messageID: ctx.messageID,
@@ -66,6 +72,19 @@ export const WriteTool = Tool.define(
             external: !containsPath(filepath, instance),
             rewritten,
           })
+          if (sharedPath !== undefined) {
+            const error = new Error(
+              `write refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
+            )
+            Trace.toolOutcome({
+              sessionID: ctx.sessionID,
+              callID: ctx.callID,
+              tool: "write",
+              outcome: "error",
+              error: error.message,
+            })
+            return yield* Effect.fail(error)
+          }
           yield* assertExternalDirectoryEffect(ctx, filepath)
 
           const exists = yield* fs.existsSafe(filepath)

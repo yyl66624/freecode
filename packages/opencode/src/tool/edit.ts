@@ -18,7 +18,7 @@ import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { containsPath } from "../project/instance-context"
 import { Trace } from "@/freecode/trace"
-import { rewriteAbsolutePath } from "@/freecode/isolation"
+import { rewriteAbsolutePath, sharedCheckoutPath } from "@/freecode/isolation"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
 
@@ -105,6 +105,23 @@ export const EditTool = Tool.define(
             external: !containsPath(filePath, instance),
             rewritten,
           })
+          // FREE-25 guard rail: refuse an edit that targets the shared checkout
+          // from inside an isolated subagent (the rewrite missed it, e.g. the
+          // model reconstructed the path from a 401 error message).
+          const sharedPath = sharedCheckoutPath(instance, filePath)
+          if (sharedPath !== undefined) {
+            const error = new Error(
+              `edit refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
+            )
+            Trace.toolOutcome({
+              sessionID: ctx.sessionID,
+              callID: ctx.callID,
+              tool: "edit",
+              outcome: "error",
+              error: error.message,
+            })
+            throw error
+          }
           yield* assertExternalDirectoryEffect(ctx, filePath)
 
           let diff = ""

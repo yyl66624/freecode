@@ -27,7 +27,7 @@ import { contains as pathContains } from "@/util/filesystem"
  * recorded traces in tests without a provider and without a repository.
  */
 
-export type Label = "OK" | "WRONG_CWD" | "NO_WRITE" | "ERROR"
+export type Label = "OK" | "WRONG_CWD" | "NO_WRITE" | "ERROR" | "AUTH_FAILED"
 
 export interface Evidence {
   /** The events that the verdict is built from, in trace order. */
@@ -182,9 +182,29 @@ export function decide(events: Trace.Event[]): Result {
     return finish("ERROR", `no write was expected (${reason})`, evidence)
   }
 
-  // Turn failed: the failure is the story, and it is not a verdict about where
-  // a write landed.
+  // Turn failed: the failure is the story. When a write attempt already
+  // resolved outside the subagent's worktree (the wrong[] / wouldResolve[]
+  // evidence is non-empty) even though the turn errored, the failure is not
+  // just "the turn died" — the turn died AND the write went to the wrong
+  // place (or was stopped at the door). Report AUTH_FAILED, not ERROR, so
+  // the runner can distinguish "the provider refused the request and the
+  // model tried to write through the shared checkout" from "the model never
+  // attempted a write" (NO_WRITE) or "the write landed in the worktree" (OK).
   if (turn && turn["outcome"] === "error") {
+    if (wrong.length > 0) {
+      return finish(
+        "AUTH_FAILED",
+        `turn failed with auth error AND ${wrong.length} write(s) targeted outside the worktree: ${wrong.join(", ")}`,
+        evidence,
+      )
+    }
+    if (wouldResolve.length > 0) {
+      return finish(
+        "AUTH_FAILED",
+        `turn failed with auth error; ${wouldResolve.length} write(s) would have resolved outside the worktree (all stopped before landing): ${wouldResolve.join(", ")}`,
+        evidence,
+      )
+    }
     return finish(
       "ERROR",
       `turn failed${turn["error"] ? `: ${String(turn["error"])}` : ""}`,

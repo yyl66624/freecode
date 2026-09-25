@@ -10,7 +10,7 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import { trimDiff } from "./edit"
 import { containsPath } from "../project/instance-context"
 import { Trace } from "@/freecode/trace"
-import { rewriteAbsolutePath } from "@/freecode/isolation"
+import { rewriteAbsolutePath, sharedCheckoutPath } from "@/freecode/isolation"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import DESCRIPTION from "./apply_patch.txt"
@@ -88,6 +88,29 @@ export const ApplyPatchTool = Tool.define(
       }
 
       // Validate file paths and check permissions
+      // FREE-25 guard rail: refuse any hunk that targets the shared checkout
+      // from inside an isolated subagent (the rewrite missed it, e.g. the
+      // model reconstructed the path from a 401 error message).
+      {
+        for (const hunk of hunks) {
+          const { filePath } = resolveHunk(hunk.path)
+          const sharedPath = sharedCheckoutPath(instance, filePath)
+          if (sharedPath !== undefined) {
+            Trace.toolOutcome({
+              sessionID: ctx.sessionID,
+              callID: ctx.callID,
+              tool: "apply_patch",
+              outcome: "error",
+              error: `apply_patch refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
+            })
+            return yield* Effect.fail(
+              new Error(
+                `apply_patch refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
+              ),
+            )
+          }
+        }
+      }
       const fileChanges: Array<{
         filePath: string
         oldContent: string
