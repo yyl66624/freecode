@@ -2,7 +2,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test"
 import { writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from "fs"
 import path from "path"
 import { $ } from "bun"
-import { Isolation, rewriteAbsolutePath, inIsolationWorktree, sharedCheckoutPath } from "@/freecode/isolation"
+import { Isolation, rewriteAbsolutePath, inIsolationWorktree, sharedCheckoutPath, refuseSharedCheckout } from "@/freecode/isolation"
 import { Verdict } from "@/freecode/verdict"
 import { Trace } from "@/freecode/trace"
 
@@ -379,6 +379,134 @@ describe("FREE-25: guard-rail refusal trace contract", () => {
     // The 401 is a plain provider error, not an isolation defect.
     expect(verdict.label).toBe("ERROR")
     expect(verdict.isolated).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Production-form trace contract (Mika ruling 01a0d77d requirement 1):
+// the regression must not hand-write trace events that the production
+// refuse-branch no longer emits.  Instead: drive the actual
+// `refuseSharedCheckout` code path (the one write.ts / edit.ts /
+// apply_patch.ts all call), capture the trace it produces, and assert on
+// THAT trace: a refused write leaves a `tool.resolve(resolved=shared
+// checkout path)` in the record, and Verdict.decide on the production
+// trace (resolve + permission outcome + 401 turn.end) verdicts AUTH_FAILED.
+//
+// Pre-fix (`b9efb86`): the write/edit refuse-branch recorded only
+// `tool.outcome=permission` — no `tool.resolve` — so a 401 turn fell
+// through to bare ERROR and this test failed.  Post-fix (`3b2eb3a` + the
+// `refuseSharedCheckout` extraction): the refuse-branch records the resolve
+// first, so the production trace carries the wouldResolve signal.
+// ---------------------------------------------------------------------------
+
+describe("FREE-25: production-form guard-rail trace (driven through refuseSharedCheckout)", () => {
+  const SESSION: Trace.Event = {
+    kind: "session",
+    sessionID: "ses_child",
+    parentSessionID: "ses_parent",
+    agent: "coder",
+    mode: "isolated",
+    directory: "/private/tmp/proj/.freecode/worktrees/ses_child",
+    worktree: "/private/tmp/proj/.freecode/worktrees/ses_child",
+    branch: "freecode/ses_child",
+  } as Trace.Event
+  const INSTANCE = {
+    directory: "/private/tmp/proj/.freecode/worktrees/ses_child",
+    worktree: "/private/tmp/proj/.freecode/worktrees/ses_child",
+  }
+
+  function driveRefusal(tool: "write" | "edit", inputPath: string, rewritten: boolean) {
+    const traceFile = path.join(ROOT, `f25-${tool}-refusal-${process.pid}.jsonl`)
+    Trace._setConfigEnabled(true)
+    Trace._setCurrentFile(traceFile)
+    try {
+      const error = refuseSharedCheckout(
+        INSTANCE,
+        "/private/tmp/proj/geom.py",
+        { sessionID: "ses_child", messageID: "msg_1", callID: "call_1" },
+        tool,
+        inputPath,
+        rewritten,
+      )
+      // The refusal must fire: the target is in the shared checkout.
+      expect(error).toBeDefined()
+      expect(error!.message).toContain("targets the shared checkout")
+      // Now read back the trace the PRODUCTION refuse-branch emitted.
+      const events = Trace.read("ses_child")
+      const resolves = events.filter((e) => e.kind === "tool.resolve")
+      const outcomes = events.filter((e) => e.kind === "tool.outcome")
+      expect(resolves.length).toBe(1)
+      expect(resolves[0]["resolved"]).toBe("/private/tmp/proj/geom.py")
+      expect(resolves[0]["external"]).toBe(true)
+      expect(outcomes.length).toBe(1)
+      expect(outcomes[0]["outcome"]).toBe("permission")
+      // Prepend the session record the task tool writes when it spawns the
+      // subagent (refuseSharedCheckout only writes the tool-level events).
+      return [SESSION, ...(events as unknown as Trace.Event[])]
+    } finally {
+      Trace._setCurrentFile(undefined)
+      Trace._setConfigEnabled(false)
+      rmSync(traceFile, { force: true })
+    }
+  }
+
+  test("write refuse-branch trace + 401 turn → AUTH_FAILED (production-form, no hand-written events)", () => {
+    const events = driveRefusal("write", "/private/tmp/proj/geom.py", true)
+    // Append the turn end the way the subagent runtime does after a 401.
+    const full: Trace.Event[] = [
+      ...events,
+      {
+        kind: "turn.end",
+        sessionID: "ses_child",
+        parentSessionID: "ses_parent",
+        agent: "coder",
+        outcome: "error",
+        error: "401 Unauthorized",
+      } as Trace.Event,
+    ]
+    const verdict = Verdict.decide(full)
+    expect(verdict.label).toBe("AUTH_FAILED")
+  })
+
+  test("edit refuse-branch trace + 401 turn → AUTH_FAILED (production-form, no hand-written events)", () => {
+    const events = driveRefusal("edit", "/private/tmp/proj/geom.py", false)
+    const full: Trace.Event[] = [
+      ...events,
+      {
+        kind: "turn.end",
+        sessionID: "ses_child",
+        parentSessionID: "ses_parent",
+        agent: "coder",
+        outcome: "error",
+        error: "401 Unauthorized",
+      } as Trace.Event,
+    ]
+    const verdict = Verdict.decide(full)
+    expect(verdict.label).toBe("AUTH_FAILED")
+  })
+
+  test("refused write targeting the worktree itself is NOT refused (guard stays quiet)", () => {
+    const traceFile = path.join(ROOT, "f25-no-refusal.jsonl")
+    Trace._setConfigEnabled(true)
+    Trace._setCurrentFile(traceFile)
+    try {
+      const error = refuseSharedCheckout(
+        INSTANCE,
+        "/private/tmp/proj/.freecode/worktrees/ses_child/geom.py",
+        { sessionID: "ses_child", callID: "call_2" },
+        "write",
+        "geom.py",
+        false,
+      )
+      // Target is inside the subagent's own worktree: no refusal, no trace
+      // events written by the guard itself.
+      expect(error).toBeUndefined()
+      expect(Trace.read("ses_child").length).toBe(0)
+    } finally {
+      Trace._setCurrentFile(undefined)
+      Trace._setConfigEnabled(false)
+      rmSync(traceFile, { force: true })
+    }
   })
 })
 

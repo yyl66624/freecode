@@ -18,7 +18,7 @@ import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { containsPath } from "../project/instance-context"
 import { Trace } from "@/freecode/trace"
-import { rewriteAbsolutePath, sharedCheckoutPath } from "@/freecode/isolation"
+import { rewriteAbsolutePath, refuseSharedCheckout } from "@/freecode/isolation"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
 
@@ -107,35 +107,12 @@ export const EditTool = Tool.define(
           // still points at the shared checkout (the rewrite missed it, e.g. the
           // model reconstructed it from a 401 error message), refuse the edit
           // before any disk I/O or permission ask.
-          const sharedPath = sharedCheckoutPath(instance, filePath)
-          // Record the resolve BEFORE the refusal (aligned with apply_patch).
-          // A refused edit still carries its resolved path in the trace, so
-          // Verdict.decide's wouldResolve sees the wrong-place signal and a
-          // 401 turn verdicts AUTH_FAILED instead of a bare ERROR.
-          if (sharedPath !== undefined) {
-            const error = new Error(
-              `edit refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
-            )
-            Trace.toolResolve({
-              sessionID: ctx.sessionID,
-              messageID: ctx.messageID,
-              callID: ctx.callID,
-              tool: "edit",
-              inputPath,
-              cwd: instance.directory,
-              resolved: sharedPath,
-              external: !containsPath(sharedPath, instance),
-              rewritten,
-            })
-            Trace.toolOutcome({
-              sessionID: ctx.sessionID,
-              callID: ctx.callID,
-              tool: "edit",
-              outcome: "permission",
-              error: error.message,
-            })
-            throw error
-          }
+          // FREE-25 guard rail: when the model hands back an absolute path that
+          // still points at the shared checkout (the rewrite missed it, e.g. the
+          // model reconstructed it from a 401 error message), refuse the edit
+          // before any disk I/O or permission ask.
+          const guardError = refuseSharedCheckout(instance, filePath, ctx, "edit", inputPath, rewritten)
+          if (guardError) throw guardError
           Trace.toolResolve({
             sessionID: ctx.sessionID,
             messageID: ctx.messageID,
