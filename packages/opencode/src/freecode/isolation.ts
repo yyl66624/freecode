@@ -128,11 +128,11 @@ export function refuseSharedCheckout(
 ): Error | undefined {
   const sharedPath = sharedCheckoutPath(instance, filepath)
   if (sharedPath === undefined) return undefined
-  const error = new Error(
-    `${tool} refused: path '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
-  )
   // Lexical boundary check: a shared-checkout path is by definition outside
   // the subagent's worktree, so `external` is always true here.
+  const error = new Error(
+    `isolated subagent write refused: '${sharedPath}' targets the shared checkout, not this task's worktree; isolation is in effect for this subagent`,
+  )
   Trace.toolResolve({
     sessionID: ctx.sessionID,
     messageID: ctx.messageID,
