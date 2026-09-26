@@ -45,15 +45,14 @@ describe("FREE-28: {file:...} extracts the credential value, not the whole file"
         "export DEEPSEEK_MAIN_API_KEY=sk-repro-abc\nexport OTHER=irrelevant\n",
       )
       const configText = `{"apiKey":"{file:${file}}"}`
-      // The filename carries no provider hint ("secrets"), so the single-
-      // assignment rule does NOT apply (two assignments) → the provider-
-      // variable line must be picked via the variable hint the caller
-      // could supply; without a hint and multiple assignments the fix
-      // must NOT ship the raw multi-line content. It reports missing.
+      // The filename carries no provider hint ("secrets"), and the file has
+      // two assignments, so the generic config layer cannot pick one — the
+      // {file:...} token must be left in place for the provider layer
+      // (ProviderTest.expandApiKeyPlaceholder, which knows the provider id)
+      // to resolve. Assert that positively: the result is the untouched
+      // token, not the raw multi-line content (the FREE-28 401 shape).
       const result = await expand(configText, dir)
-      expect(result).not.toContain("\n")
-      expect(result).not.toContain("export ")
-      expect(result).not.toBe("export DEEPSEEK_MAIN_API_KEY=sk-repro-abc\nexport OTHER=irrelevant")
+      expect(result).toBe(`{file:${file}}`)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

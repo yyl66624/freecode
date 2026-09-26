@@ -119,10 +119,6 @@ export async function substitute(input: SubstituteInput) {
       filePath = path.join(os.homedir(), filePath.slice(2))
     }
 
-    if (filePath.startsWith("~/")) {
-      filePath = path.join(os.homedir(), filePath.slice(2))
-    }
-
     const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(configDir, filePath)
     const fileContent = (
       await Filesystem.readText(resolvedPath).catch((error: NodeJS.ErrnoException) => {
