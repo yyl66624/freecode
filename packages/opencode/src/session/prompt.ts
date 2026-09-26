@@ -467,7 +467,18 @@ const layer = Layer.effect(
               yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
               throw error
             }
-            const model = input.model ?? agent.model ?? (yield* currentModel(input.sessionID))
+            let model: { providerID: ProviderV2.ID; modelID: ModelV2.ID; variant?: string } = input.model ?? agent.model ?? (yield* currentModel(input.sessionID))
+            // FreeCode: resolve the routing sentinel for shell turns so the
+            // shell command model uses the user's pool resource, not the
+            // gateway default that requires its own credentials.
+            if (model.providerID === "freecode" && (model.modelID === "auto" || model.modelID === "")) {
+              const routed = yield* provider.getModel(model.providerID, model.modelID).pipe(
+                Effect.catch(() => Effect.succeed(undefined)),
+              )
+              if (routed) {
+                model = { providerID: routed.providerID, modelID: routed.id, variant: model.variant }
+              }
+            }
             const userMsg: SessionV1.User = {
               id: input.messageID ?? MessageID.ascending(),
               sessionID: input.sessionID,

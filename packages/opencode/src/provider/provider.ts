@@ -1599,6 +1599,22 @@ const layer = Layer.effect(
           })
         }
 
+        // FreeCode: expand {env:VAR} placeholders in provider options.apiKey.
+        // The config schema stores the placeholder as an opaque string; the
+        // provider layer must expand it here, at the single point where
+        // provider credentials are read, so the AI SDK receives the real key
+        // rather than the literal placeholder text.
+        for (const [id, provider] of Object.entries(configProviders)) {
+          const providerID = ProviderV2.ID.make(id)
+          if (disabled.has(providerID)) continue
+          const rawKey = (provider as { options?: { apiKey?: string } }).options?.apiKey
+          if (typeof rawKey !== "string") continue
+          const m = rawKey.match(/^\{env:([^}]+)\}$/)
+          if (m && envs[m[1]]) {
+            mergeProvider(providerID, { options: { apiKey: envs[m[1]] } })
+          }
+        }
+
         // load apikeys
         const auths = yield* auth.all().pipe(Effect.orDie)
         for (const [id, provider] of Object.entries(auths)) {
@@ -1984,6 +2000,7 @@ const layer = Layer.effect(
       const s = yield* InstanceState.get(state)
       const provider = s.providers[providerID]
       if (!provider) return undefined
+
       for (const item of query) {
         for (const modelID of Object.keys(provider.models)) {
           if (modelID.includes(item)) return { providerID, modelID }
@@ -2058,6 +2075,31 @@ const layer = Layer.effect(
         if (candidates[0]) return candidates[0]
       }
 
+      // FreeCode: when the caller is on a FreeCode-routed session (model: "auto")
+      // and no family-priority model was found, use the pool's model for this
+      // provider so title/summary calls use the user's resource rather than
+      // falling back to the gateway default that needs its own key.
+      if (cfg.model === "auto") {
+        const poolProviders = new Set<string>()
+        for (const entries of Object.values(s.tierPool ?? {})) {
+          for (const entry of entries ?? []) {
+            const slash = entry.indexOf("/")
+            if (slash > 0) poolProviders.add(entry.slice(0, slash))
+          }
+        }
+        if (poolProviders.has(String(providerID))) {
+          const sorted = sort(Object.values(provider.models))
+          const poolModel = sorted[0]
+          if (poolModel) {
+            return {
+              ...provider,
+              ...poolModel,
+              providerID,
+            }
+          }
+        }
+      }
+
       return undefined
     })
 
@@ -2109,11 +2151,39 @@ const layer = Layer.effect(
  */
 function firstAvailableModel(state: State): { providerID: ProviderV2.ID; modelID: ModelV2.ID } | undefined {
   const configured = Object.keys(state.providers)
-  const provider = configured.length ? state.providers[ProviderV2.ID.make(configured[0])] : undefined
+
+  // FreeCode: when the user has set up a pool, the fallback must be one of
+  // the pool's providers, not the gateway default. Without this, a machine
+  // that only has `deepseek-main` in its pool falls back to
+  // `opencode/big-pickle` which requires a free-tier opencode key and
+  // fails with "OpenCode 1.18.0 or newer is required to use the free tier".
+  const poolProviders = new Set<string>()
+  for (const entries of Object.values(state.tierPool ?? {})) {
+    for (const entry of entries ?? []) {
+      const slash = entry.indexOf("/")
+      if (slash > 0) poolProviders.add(entry.slice(0, slash))
+    }
+  }
+
+  type ProviderInfo = State["providers"][ProviderV2.ID]
+  let provider: ProviderInfo | undefined
+  if (poolProviders.size > 0) {
+    for (const id of configured) {
+      if (!poolProviders.has(id)) continue
+      const candidate = state.providers[ProviderV2.ID.make(id)]
+      if (candidate && Object.keys(candidate.models).length > 0) {
+        provider = candidate
+        break
+      }
+    }
+  }
+  if (!provider) {
+    provider = configured.length ? state.providers[ProviderV2.ID.make(configured[0])] : undefined
+  }
   if (!provider) return undefined
   const [model] = sort(Object.values(provider.models))
   if (!model) return undefined
-  return { providerID: provider.id, modelID: model.id }
+  return { providerID: ProviderV2.ID.make(provider.id), modelID: ModelV2.ID.make(model.id) }
 }
 
 const priority = ["gpt-5", "claude-sonnet-4", "big-pickle", "gemini-3-pro"]

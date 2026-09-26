@@ -93,6 +93,7 @@ const RULES: Rule[] = [
       /incorrect api key/i,
       /authentication/i,
       /api key not valid/i,
+      /authorization required/i,
     ],
   },
   {
