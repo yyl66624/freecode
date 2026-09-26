@@ -37,6 +37,41 @@ export function envVarFor(id: string): string {
 }
 
 /**
+ * Expand a placeholder in `options.apiKey` to its real value.
+ *
+ * Two placeholder forms are recognised:
+ * - `{env:VAR}`       — looked up in `envs` (no process.env fallback).
+ * - `{file:/path}`    — read the line `<providerEnvVar>=...` from the file.
+ *
+ * Returns `undefined` when the placeholder cannot be resolved. The caller
+ * decides what to do with a missing credential; this function is pure
+ * (no process.env access) so it can be shared by the probe and the
+ * provider layer without pulling in `process.env` as an implicit input.
+ */
+export function expandApiKeyPlaceholder(
+  apiKey: string,
+  id: string,
+  envs: Record<string, string | undefined>,
+): string | undefined {
+  const envMatch = apiKey.match(/^\{env:([^}]+)\}$/)
+  if (envMatch) return envs[envMatch[1]]
+
+  const fileMatch = apiKey.match(/^\{file:([^}]+)\}$/)
+  if (fileMatch) {
+    const file = fileMatch[1]
+    if (!existsSync(file)) return undefined
+    const variable = envVarFor(id)
+    const line = readFileSync(file, "utf8")
+      .split("\n")
+      .find((entry) => entry.replace(/^export\s+/, "") === `${variable}=` || entry.startsWith(`${variable}=`))
+    if (!line) return undefined
+    return line.replace(/^export\s+/, "").slice(variable.length + 1).trim()
+  }
+
+  return undefined
+}
+
+/**
  * Resolve the credential for this provider, in the order the config loader
  * would try it: an explicit `{env:VAR}` / `{file:path}` / literal key in
  * `options.apiKey`, then the provider's conventional env var.
@@ -44,19 +79,8 @@ export function envVarFor(id: string): string {
 export function resolveCredential(id: string, options: Record<string, unknown> | undefined): string | undefined {
   const apiKey = options?.apiKey
   if (typeof apiKey === "string" && apiKey) {
-    const envMatch = apiKey.match(/^\{env:(.+)\}$/)
-    if (envMatch) return process.env[envMatch[1]]
-    const fileMatch = apiKey.match(/^\{file:(.+)\}$/)
-    if (fileMatch) {
-      const file = fileMatch[1]
-      if (!existsSync(file)) return undefined
-      const variable = envVarFor(id)
-      const line = readFileSync(file, "utf8")
-        .split("\n")
-        .find((entry) => entry.replace(/^export\s+/, "") === `${variable}=` || entry.startsWith(`${variable}=`))
-      if (!line) return undefined
-      return line.replace(/^export\s+/, "").slice(variable.length + 1).trim()
-    }
+    const placeholder = expandApiKeyPlaceholder(apiKey, id, process.env as Record<string, string | undefined>)
+    if (placeholder !== undefined) return placeholder
     if (!apiKey.startsWith("{")) return apiKey
   }
   return process.env[envVarFor(id)]

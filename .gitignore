@@ -44,3 +44,7 @@ dist/
 dist/release/
 packages/opencode/verdict-decide.mjs
 .docbuild/
+
+# FreeCode: local runtime — secrets, caches, scratch; never committed
+.runtime/
+Library/

@@ -19,6 +19,7 @@ import { Global } from "@opencode-ai/core/global"
 import path from "path"
 import { pathToFileURL } from "url"
 import { Effect, Layer, Context, Schema, Types } from "effect"
+import { ProviderTest } from "../freecode/provider-test"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { EffectPromise } from "@/effect/promise"
@@ -1599,21 +1600,29 @@ const layer = Layer.effect(
           })
         }
 
-        // FreeCode: expand {env:VAR} placeholders in provider options.apiKey.
-        // The config schema stores the placeholder as an opaque string; the
-        // provider layer must expand it here, at the single point where
-        // provider credentials are read, so the AI SDK receives the real key
-        // rather than the literal placeholder text.
-        for (const [id, provider] of Object.entries(configProviders)) {
-          const providerID = ProviderV2.ID.make(id)
-          if (disabled.has(providerID)) continue
-          const rawKey = (provider as { options?: { apiKey?: string } }).options?.apiKey
-          if (typeof rawKey !== "string") continue
-          const m = rawKey.match(/^\{env:([^}]+)\}$/)
-          if (m && envs[m[1]]) {
-            mergeProvider(providerID, { options: { apiKey: envs[m[1]] } })
+        // FreeCode: expand credential placeholders ({env:VAR} / {file:...})
+        // in provider options.apiKey. This runs AFTER the re-apply loop below
+        // so the expanded value is the last write to `providers[].options.apiKey`
+        // and is not overwritten by the raw config value. Using the shared pure
+        // function keeps this consistent with the probe path (ProviderTest) and
+        // the config variable expansion (ConfigVariable.substitute).
+        // Placed here (inside the env-load block, not after the re-apply loop)
+        // because `envs` is in scope; the re-apply loop at the end of this
+        // function will re-merge `provider.options` — we call the expand
+        // function again in a follow-up loop that runs after it.
+        const expandConfigProviderKeys = () => {
+          for (const [id, provider] of configProviders) {
+            const providerID = ProviderV2.ID.make(id)
+            if (disabled.has(providerID)) continue
+            const rawKey = (provider as { options?: { apiKey?: string } }).options?.apiKey
+            if (typeof rawKey !== "string" || !rawKey.startsWith("{")) continue
+            const expanded = ProviderTest.expandApiKeyPlaceholder(rawKey, id, envs)
+            if (expanded !== undefined) {
+              mergeProvider(providerID, { options: { apiKey: expanded } })
+            }
           }
         }
+        expandConfigProviderKeys()
 
         // load apikeys
         const auths = yield* auth.all().pipe(Effect.orDie)
@@ -1676,6 +1685,13 @@ const layer = Layer.effect(
           if (provider.options) partial.options = provider.options
           mergeProvider(providerID, partial)
         }
+
+        // Re-expand credential placeholders AFTER the re-apply loop so that the
+        // expanded key (from envs or file) is the final value written to
+        // `providers[].options.apiKey`. The re-apply loop merges the raw
+        // config options (which still carry the placeholder string); if we
+        // only expanded before it, mergeDeep would let the raw value win.
+        expandConfigProviderKeys()
 
         const gitlab = ProviderV2.ID.make("gitlab")
         if (discoveryLoaders[gitlab] && providers[gitlab] && isProviderAllowed(gitlab)) {
