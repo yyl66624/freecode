@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { writeFileSync, rmSync, mkdtempSync } from "fs"
+import os from "os"
+import path from "path"
 import { ProviderTest } from "@/freecode/provider-test"
 
 /**
@@ -55,6 +58,48 @@ describe("credential resolution order", () => {
   test("an env var with an unusual provider id is uppercased and underscores-substituted", () => {
     expect(ProviderTest.envVarFor("deepseek-main")).toBe("DEEPSEEK_MAIN_API_KEY")
     expect(ProviderTest.envVarFor("my.provider")).toBe("MY_PROVIDER_API_KEY")
+  })
+
+  // FREE-27 M2 regression (qa 01a0dd15): writeSecret's canonical form is
+  // `export VAR=VALUE\n`.  The old find-callback only matched the empty
+  // placeholder line (`VAR=` with no value), so a real secret written in
+  // the canonical form made `{file:...}` return undefined and the whole
+  // run fell through to 401.  These pin both the canonical write form and
+  // the bare form.
+  test("{file:...} matches the writeSecret canonical `export VAR=VALUE` form", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f27-file-"))
+    try {
+      const secret = path.join(dir, "secrets.env")
+      writeFileSync(secret, "export DEEPSEEK_MAIN_API_KEY=sk-repro-abc\nexport OTHER=x\n")
+      const value = ProviderTest.expandApiKeyPlaceholder("{file:" + secret + "}", "deepseek-main", {})
+      expect(value).toBe("sk-repro-abc")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("{file:...} still matches the bare `VAR=VALUE` form", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f27-file-"))
+    try {
+      const secret = path.join(dir, "secrets.env")
+      writeFileSync(secret, "DEEPSEEK_MAIN_API_KEY=sk-repro-bare\n")
+      const value = ProviderTest.expandApiKeyPlaceholder("{file:" + secret + "}", "deepseek-main", {})
+      expect(value).toBe("sk-repro-bare")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("{file:...} returns undefined when the variable line is absent", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "f27-file-"))
+    try {
+      const secret = path.join(dir, "secrets.env")
+      writeFileSync(secret, "export UNRELATED=1\n")
+      const value = ProviderTest.expandApiKeyPlaceholder("{file:" + secret + "}", "deepseek-main", {})
+      expect(value).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

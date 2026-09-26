@@ -61,11 +61,19 @@ export function expandApiKeyPlaceholder(
     const file = fileMatch[1]
     if (!existsSync(file)) return undefined
     const variable = envVarFor(id)
+    // Strip the `export ` prefix first, then match the single `VAR=`
+    // shape.  writeSecret's canonical form is `export VAR=VALUE\n`; the
+    // old `entry.replace(...) === "${variable}="` equality branch only
+    // matched the empty-value placeholder line and silently missed every
+    // real secret line, so the `{file:...}` branch returned undefined for
+    // the canonical form (the FREE-27 M2 regression, qa 01a0dd15).
     const line = readFileSync(file, "utf8")
       .split("\n")
-      .find((entry) => entry.replace(/^export\s+/, "") === `${variable}=` || entry.startsWith(`${variable}=`))
+      .map((entry) => entry.trim())
+      .map((entry) => entry.replace(/^export\s+/, ""))
+      .find((entry) => entry.startsWith(`${variable}=`))
     if (!line) return undefined
-    return line.replace(/^export\s+/, "").slice(variable.length + 1).trim()
+    return line.slice(variable.length + 1).trim()
   }
 
   return undefined
