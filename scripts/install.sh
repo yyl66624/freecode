@@ -102,7 +102,7 @@ if [[ "$FROM_RELEASE" == "1" ]]; then
     BASE="https://github.com/$REPO/releases/download/v$VERSION"
   fi
   URL="$BASE/freecode-$PLATFORM.tar.gz"
-  SUM_URL="$BASE/SHA256SUMS"
+  SUM_URL="$BASE/checksums.txt"
 
   say "downloading $URL"
   # `FREECODE_RELEASE_BASE` exists so this branch is testable without publishing a
@@ -111,7 +111,7 @@ if [[ "$FROM_RELEASE" == "1" ]]; then
   if [[ -n "${FREECODE_RELEASE_BASE:-}" ]]; then
     BASE="$FREECODE_RELEASE_BASE"
     URL="$BASE/freecode-$PLATFORM.tar.gz"
-    SUM_URL="$BASE/SHA256SUMS"
+    SUM_URL="$BASE/checksums.txt"
   fi
   curl -fsSL "$URL" -o "$STAGE/freecode.tar.gz" || fail "download failed"
 

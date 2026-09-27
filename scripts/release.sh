@@ -10,7 +10,7 @@
 #   └── UPSTREAM.md
 #
 #   dist/release/freecode-darwin-arm64.tar.gz
-#   dist/release/SHA256SUMS
+#   dist/release/checksums.txt
 #
 # The bridge is archived alongside the binary rather than left to the installer,
 # so a release is a complete, self-describing artifact: what was tested is what is
@@ -57,9 +57,9 @@ done
   COPYFILE_DISABLE=1 tar -czf "freecode-$PLATFORM.tar.gz" "freecode-$PLATFORM"
 )
 
-shasum -a 256 "$OUT/freecode-$PLATFORM.tar.gz" | sed "s|$OUT/||" > "$OUT/SHA256SUMS"
+shasum -a 256 "$OUT/freecode-$PLATFORM.tar.gz" | sed "s|$OUT/||" > "$OUT/checksums.txt"
 
 SIZE="$(du -h "$OUT/freecode-$PLATFORM.tar.gz" | awk '{print $1}')"
 printf 'ok  freecode-%s.tar.gz (%s)\n' "$PLATFORM" "$SIZE"
-printf 'ok  SHA256SUMS\n'
-cat "$OUT/SHA256SUMS"
+printf 'ok  checksums.txt\n'
+cat "$OUT/checksums.txt"
