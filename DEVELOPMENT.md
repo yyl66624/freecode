@@ -1141,23 +1141,41 @@ was reached).
 
 The gateway path now pins `baseURL: "https://api.anthropic.com"` when building
 the Anthropic passthrough client, so a user-set `ANTHROPIC_BASE_URL`
-(MiniMax/GLM/Kimi setups) can no longer hijack that route. `openai/*` reads
-`OPENAI_BASE_URL` by the same mechanism and is **not** pinned yet. Regression
-guard: `test/provider/provider.test.ts` "cloudflare-ai-gateway anthropic
-passthrough ignores ANTHROPIC_BASE_URL" — fails against the bare call, passes
-against the pinned one.
+(MiniMax/GLM/Kimi setups) can no longer hijack that route. Regression guard:
+`test/provider/provider.test.ts` "cloudflare-ai-gateway anthropic passthrough
+ignores ANTHROPIC_BASE_URL" — fails against the bare call, passes against the
+pinned one.
+
+**FREE-36 (09-28) closes the `openai/*` half of this defect.** That branch called
+the bare `createOpenAI()`, which resolves `OPENAI_BASE_URL` by the same
+`loadOptionalSetting` mechanism, and it now pins
+`baseURL: "https://api.openai.com/v1"`. One contract difference between the two
+SDKs matters when reading the two guards: `@ai-sdk/anthropic` puts `baseURL` on
+the step model config, while `@ai-sdk/openai@3.0.88` leaves no `baseURL` field
+there at all and closes over it in a `config.url({ path })` builder, so the
+openai guard reads that builder's output —
+`config.url({ path: "/responses", modelId: "gpt-5.4" })` →
+`https://api.openai.com/v1/responses` — instead of a config field. That is the
+same surface `ai-gateway-provider` matches: its `GATEWAY_PROVIDERS` table is
+tested against the step model's request URL. Measured: unset-environment run of
+"cloudflare-ai-gateway openai passthrough ignores OPENAI_BASE_URL" with
+`OPENAI_BASE_URL=https://api.minimaxi.com/v1` returned
+`https://api.minimaxi.com/v1/responses` before the pin (fail) and the
+gateway-matching host after (pass). `cf-ai-gateway-e2e.test.ts`'s `gatewayModel`
+fixture pins the same host, so it keeps representing runtime routing.
 
 **Rule for every future run of these suites** (this is what the 09-25 note meant
 by "state the three elements"; it is now specific):
 
 ```sh
-unset $(env | grep -oiE '^(ANTHROPIC|CLOUDFLARE|CF_)[A-Z_]*' | tr '\n' ' ')
+unset $(env | grep -oiE '^(ANTHROPIC|OPENAI|CLOUDFLARE|CF_)[A-Z_]*' | tr '\n' ' ')
 ```
 
 `ANTHROPIC_*` in particular is injected into this workspace's processes by the
 agent runtime's model routing, so it is present in some sessions and absent in
 others — which is exactly why two observers on the same commit saw 9/4 and 13/0
-for three days.
+for three days. `OPENAI_BASE_URL` joins the list for the same reason (FREE-36):
+it is a legitimate user setting and it rewrites the OpenAI step host.
 
 ### FREE-26: what the hard throw actually guards
 

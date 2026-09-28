@@ -2271,3 +2271,45 @@ it.instance(
     }),
   15_000,
 )
+
+// FREE-36 regression, the symmetric guard for the `openai/*` passthrough branch
+// that FREE-35 fixed for `anthropic/*`. `@ai-sdk/openai` resolves
+// `OPENAI_BASE_URL` whenever `createOpenAI()` is called without an explicit
+// `baseURL`; the rewritten host matches no `GATEWAY_PROVIDERS` pattern, so
+// `ai-gateway-provider@3.2.0` throws `provider "openai.responses" is currently
+// not supported` (dist/index.mjs:577) before any request reaches the gateway.
+// That is the defect class hitting MiniMax/GLM/Kimi users, who set
+// `OPENAI_BASE_URL`.
+//
+// This is the same assertion shape as the anthropic guard above, against a
+// different SDK contract: `@ai-sdk/openai@3.0.88` does not put `baseURL` on the
+// step model config at all, it closes over it in a `url({ path })` builder
+// (`provider.ts` -> responses model -> `config.url({ path: "/responses" })`),
+// so the env value is observable as the host of that builder's output. Reading
+// it is what `ai-gateway-provider` does too: it matches `GATEWAY_PROVIDERS`
+// against the step model's request URL, not against any config field.
+//
+// The explicit 15s budget matches the anthropic guard: `beforeAll` warms the
+// `ai-gateway-provider` install, so this only carries the cold cost if the test
+// is ever run without that warm-up.
+it.instance(
+  "cloudflare-ai-gateway openai passthrough ignores OPENAI_BASE_URL",
+  () =>
+    Effect.gen(function* () {
+      yield* set("OPENAI_BASE_URL", "https://api.minimaxi.com/v1")
+      yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
+      yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
+      yield* set("CLOUDFLARE_API_TOKEN", "test-token")
+      const provider = yield* Provider.Service
+      const model = yield* provider.getModel(
+        ProviderV2.ID.make("cloudflare-ai-gateway"),
+        ModelV2.ID.make("openai/gpt-5.4"),
+      )
+      const language = (yield* provider.getLanguage(model)) as unknown as {
+        models?: { config?: { url?: (args: { path: string; modelId: string }) => string } }[]
+      }
+      const stepURL = language.models?.[0]?.config?.url
+      expect(stepURL?.({ path: "/responses", modelId: "gpt-5.4" })).toBe("https://api.openai.com/v1/responses")
+    }),
+  15_000,
+)
