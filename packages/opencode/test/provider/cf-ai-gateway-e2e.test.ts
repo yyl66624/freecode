@@ -164,7 +164,9 @@ function extractUpstreamHeaders(body: unknown): Record<string, unknown> | undefi
 // Mirrors the runtime routing in provider.ts getModel.
 function gatewayModel(apiId: string, gatewayToken = "test") {
   const aigateway = createAiGateway({ accountId: "test", gateway: "test", apiKey: gatewayToken })
-  if (apiId.startsWith("openai/")) return aigateway(createOpenAI()(apiId.slice("openai/".length)))
+  if (apiId.startsWith("openai/"))
+    // FREE-36: same pin as the runtime, for the same reason as the anthropic branch below.
+    return aigateway(createOpenAI({ baseURL: "https://api.openai.com/v1" })(apiId.slice("openai/".length)))
   // FREE-35: the runtime pins `baseURL` so a user-set ANTHROPIC_BASE_URL cannot rewrite the step host
   // away from the pattern the gateway matches; mirror that here or this file stops representing runtime.
   if (apiId.startsWith("anthropic/"))

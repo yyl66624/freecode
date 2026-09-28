@@ -851,7 +851,13 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
           // and Messages APIs; new OpenAI models reject tools+reasoning_effort on chat completions.
           // The passthrough wrappers inject a CF_TEMP_TOKEN sentinel that the gateway strips before
           // dispatch, so upstream billing stays on the gateway (Unified Billing / stored BYOK).
-          if (modelID.startsWith("openai/")) return aigateway(createOpenAI()(modelID.slice("openai/".length)))
+          if (modelID.startsWith("openai/"))
+            // `@ai-sdk/openai` resolves `OPENAI_BASE_URL` when `createOpenAI()` is called without an
+            // explicit `baseURL`, and closes over it in the step model's URL builder. The rewritten host
+            // matches no `GATEWAY_PROVIDERS` pattern, so `ai-gateway-provider` throws site B before any
+            // request is sent. Pin the native host so a user-set `OPENAI_BASE_URL` (MiniMax/GLM/Kimi setups)
+            // cannot hijack this gateway route.
+            return aigateway(createOpenAI({ baseURL: "https://api.openai.com/v1" })(modelID.slice("openai/".length)))
           // models.dev lists Anthropic ids with dotted versions (claude-haiku-4.5); Anthropic's
           // Messages API expects dashed native slugs (claude-haiku-4-5), so translate before passing.
           // No native Anthropic slug contains a dot, so the blanket replacement is lossless here -
