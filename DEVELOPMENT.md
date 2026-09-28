@@ -974,47 +974,68 @@ unreconciled — but it is no longer attributable to a worktree-local store.
 ### FREE-26 reachability triage (09-28): the unwrapped-provider path IS live
 
 The 4-fail error (`Sorry, but provider "anthropic.messages" is currently not
-supported`) is produced by `AiGatewayChatLanguageModel.processModelRequest`
-when an `ai-gateway-provider` model entry's `config` has no `fetch` key. The
-09-25 log above concluded that throw was unreachable; that conclusion was based
-on tracing the **test fixture**. Tracing the **runtime** says otherwise.
+supported`) is thrown by `AiGatewayChatLanguageModel.processModelRequest` when a
+model entry's `config` has no `fetch` key. The 09-25 log above concluded that
+throw was unreachable; that conclusion traced the **test fixture**. Tracing the
+**runtime** says otherwise.
 
-Probe: `Provider.getLanguage` on a real instance
-(`CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_GATEWAY_ID`/`CLOUDFLARE_API_TOKEN` set,
-Provider/Env/Plugin layer, `provider.getModel("cloudflare-ai-gateway",
-"anthropic/claude-sonnet-4-6")` then `getLanguage`, `generateText` with `fetch`
-stubbed to a canned Anthropic Messages body):
+Probe: a real instance (Provider/Env/Plugin Effect layers,
+`CLOUDFLARE_ACCOUNT_ID`/`GATEWAY_ID`/`API_TOKEN` set) resolving
+`provider.getModel("cloudflare-ai-gateway", "anthropic/claude-sonnet-4-6")`
+then `provider.getLanguage(model)`:
 
 ```json
-{"apiNpm":"@ai-sdk/anthropic","ctor":"AiGatewayChatLanguageModel",
- "providerOfLanguage":"anthropic.messages","hasFetchInConfig":false,
- "upstreamUrl":"https://gateway.ai.cloudflare.com/v1/<account>/<gateway>",
- "cfAigAuth":"Bearer <token>","step":"anthropic","outcome":{"ok":true}}
+{"apiNpm": "@ai-sdk/anthropic", "ctor": "AiGatewayChatLanguageModel",
+ "providerOfLanguage": "anthropic.messages", "innerProvider": "anthropic.messages",
+ "outerConfigKeys": ["accountId", "gateway", "apiKey", "options"],
+ "hasFetchKeyOnOuterConfig": false,
+ "innerConfigKeys": ["provider", "baseURL", "headers", "fetch", "generateId", "supportedUrls"],
+ "innerBaseURL": "https://api.anthropic.com/v1"}
 ```
 
-So in a real process:
+Two facts follow, and both matter:
 
-- `model.api.npm` is `@ai-sdk/anthropic` (`cloudflareGatewayNpm`), and the
-  generic `resolveSDK` path imports that package — it does **not** call the
-  provider's `getModel` callback, which is where `aigateway(createAnthropic()(…))`
-  lives. `getLanguage` then falls back to `sdk.languageModel(model.api.id)`,
-  and because `Npm.add("@ai-sdk/anthropic")` returns the bare upstream package,
-  `sdk.languageModel` is `createAnthropic`.
-- The resulting language model is `AiGatewayChatLanguageModel` with
-  `provider: "anthropic.messages"` (the `@ai-sdk/anthropic` default provider
-  name) and a `config` **without a `fetch` key** — exactly the object that
-  `processModelRequest` rejects.
-- It does **not** throw today only because `resolveSDK` merges the provider's
-  `options` (which contains its own `fetch` wrapper) into the SDK config; that
-  single injected key is the only thing standing between the runtime and the
-  hard throw. Any path that builds this wrapper without that merge throws.
+1. **Real runtimes DO build the unwrapped provider object.** `model.api.npm` is
+   `@ai-sdk/anthropic` (`cloudflareGatewayNpm`), so `resolveSDK` loads that bare
+   package and ignores the provider's own `getModel` callback — the only place
+   `aigateway(createAnthropic()(…))` is called. `getLanguage` then falls back to
+   `sdk.languageModel(model.api.id)`, i.e. raw `createAnthropic()`, so the
+   language model records `provider: "anthropic.messages"` (upstream's default
+   name) and an inner `baseURL` of `https://api.anthropic.com/v1`.
+2. **It does not throw today because of one incidental key.** `resolveSDK` merges
+   the provider's `options` (which contains its own `fetch` wrapper) into the
+   constructed model, and `AiGatewayChatLanguageModel` spreads its `config` over
+   the wrapped model's config. That single injected `fetch` is the only thing
+   keeping `processModelRequest`'s hard throw from firing. Verified directly:
+   deleting just `models[0].config.fetch` reproduces the exact reported error —
+   `Sorry, but provider "anthropic.messages" is currently not supported` — while
+   leaving everything else identical. Sibling entries behave the same way
+   (`anthropic` → `anthropic.messages`, `openai` → `openai.responses`,
+   `workers-ai` → `Unified.chat`).
 
-Adjudication: the mechanism is **reachable in real use**, not a test-only
-artifact, and it sits in FreeCode-touched code (`cloudflareGatewayNpm` plus the
-`getModel`/`getLanguage` split). It is not the same object as the 09-25
-reproduction dispute — that dispute was about which side's test run was real,
-and this finding does not settle it — but it does mean the throw can no longer
-be dismissed as unreachable.
+**Adjudication: reachable.** The mechanism is not a test-only artifact and not
+unreachable-by-construction; it is protected by a single incidental merge in
+FreeCode's own `resolveSDK`/`getLanguage` split, in code FreeCode already touched
+(`cloudflareGatewayNpm`, provider `getModel`). Any future change that makes
+`options.fetch` absent for a cloudflare-ai-gateway model — a config path that
+drops it, a `file://`/`Npm.add` variant, a `baseURL`-only config, a routing path
+that resolves the model without that merge — turns it into a hard failure whose
+message names a provider the user never configured. Two consequences are worth
+noting and are NOT fixed here (P0 freeze: triage only):
+
+- The effective inner baseURL is `https://api.anthropic.com/v1`; the request
+  only becomes a gateway request because the gateway wrapper rewrites the URL
+  inside `processModelRequest`. The routing is therefore load-bearing in a way
+  the model object does not express.
+- The throw is a user-visible failure, not an internal assertion: it surfaces
+  verbatim to the user with no FreeCode-side context.
+
+This does not settle the 09-25 9/4-vs-13/0 dispute (that dispute concerned which
+side's *test* run was real); it establishes that the throw is live in production
+form, which is the M0-gate question. Follow-up fix, if P0 allows, belongs to
+`cloudflareGatewayNpm` / `resolveSDK`: resolve the wrapped provider through the
+registered `getModel` for these models instead of relying on the `options.fetch`
+merge, so the wrapped path is structural rather than incidental.
 
 ## Worktree isolation
 
