@@ -954,6 +954,68 @@ environment artefact to re-check, not a regression. Only a **stably
 reproducible form — same form, 2 consecutive runs, same fails, confirmed by
 an independent second observer** — may change the baseline numbers above.
 
+### FREE-26 fingerprint corrections (09-28, superseding the 09-25 13/0 entry)
+
+Two statements recorded in the section above are wrong and must not be cited:
+
+1. **"`node_modules` resolves to per-worktree store, not the root store" —
+   wrong.** The cwd's `node_modules` is a real directory, not a symlink; there
+   is exactly **one** `node_modules/.bun` (the workspace root's store), shared
+   by every worktree. `readlink -f node_modules` therefore resolves to itself.
+2. **"a second detached worktree `.docbuild` exists and carries its own
+   `node_modules/.bun/`" — wrong.** `.docbuild` has **no `node_modules` at all**,
+   so it cannot be the source of a divergent dependency resolution.
+
+Consequence: the "two sides ran against different stores" hypothesis is dead,
+and with it the only concrete explanation for the 9/4-vs-13/0 split that was on
+record. The 9/4 side's fingerprint was never captured, so the split stays
+unreconciled — but it is no longer attributable to a worktree-local store.
+
+### FREE-26 reachability triage (09-28): the unwrapped-provider path IS live
+
+The 4-fail error (`Sorry, but provider "anthropic.messages" is currently not
+supported`) is produced by `AiGatewayChatLanguageModel.processModelRequest`
+when an `ai-gateway-provider` model entry's `config` has no `fetch` key. The
+09-25 log above concluded that throw was unreachable; that conclusion was based
+on tracing the **test fixture**. Tracing the **runtime** says otherwise.
+
+Probe: `Provider.getLanguage` on a real instance
+(`CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_GATEWAY_ID`/`CLOUDFLARE_API_TOKEN` set,
+Provider/Env/Plugin layer, `provider.getModel("cloudflare-ai-gateway",
+"anthropic/claude-sonnet-4-6")` then `getLanguage`, `generateText` with `fetch`
+stubbed to a canned Anthropic Messages body):
+
+```json
+{"apiNpm":"@ai-sdk/anthropic","ctor":"AiGatewayChatLanguageModel",
+ "providerOfLanguage":"anthropic.messages","hasFetchInConfig":false,
+ "upstreamUrl":"https://gateway.ai.cloudflare.com/v1/<account>/<gateway>",
+ "cfAigAuth":"Bearer <token>","step":"anthropic","outcome":{"ok":true}}
+```
+
+So in a real process:
+
+- `model.api.npm` is `@ai-sdk/anthropic` (`cloudflareGatewayNpm`), and the
+  generic `resolveSDK` path imports that package — it does **not** call the
+  provider's `getModel` callback, which is where `aigateway(createAnthropic()(…))`
+  lives. `getLanguage` then falls back to `sdk.languageModel(model.api.id)`,
+  and because `Npm.add("@ai-sdk/anthropic")` returns the bare upstream package,
+  `sdk.languageModel` is `createAnthropic`.
+- The resulting language model is `AiGatewayChatLanguageModel` with
+  `provider: "anthropic.messages"` (the `@ai-sdk/anthropic` default provider
+  name) and a `config` **without a `fetch` key** — exactly the object that
+  `processModelRequest` rejects.
+- It does **not** throw today only because `resolveSDK` merges the provider's
+  `options` (which contains its own `fetch` wrapper) into the SDK config; that
+  single injected key is the only thing standing between the runtime and the
+  hard throw. Any path that builds this wrapper without that merge throws.
+
+Adjudication: the mechanism is **reachable in real use**, not a test-only
+artifact, and it sits in FreeCode-touched code (`cloudflareGatewayNpm` plus the
+`getModel`/`getLanguage` split). It is not the same object as the 09-25
+reproduction dispute — that dispute was about which side's test run was real,
+and this finding does not settle it — but it does mean the throw can no longer
+be dismissed as unreachable.
+
 ## Worktree isolation
 
 OpenCode's permission system is not a sandbox, and two agents editing one checkout
