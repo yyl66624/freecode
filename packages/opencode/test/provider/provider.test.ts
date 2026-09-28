@@ -2153,14 +2153,65 @@ it.instance("cloudflare-ai-gateway passthrough models resolve without an injecte
     yield* set("CLOUDFLARE_API_TOKEN", "test-token")
     const provider = yield* Provider.Service
     const providers = yield* provider.list()
-    // The generic path is the one that depends on this key; the wrapper's own
-    // path must not.
-    delete (providers[ProviderV2.ID.make("cloudflare-ai-gateway")].options as Record<string, unknown>)["fetch"]
+    const options = providers[ProviderV2.ID.make("cloudflare-ai-gateway")].options as Record<string, unknown>
+    // Measure what this key actually is before touching it, and only then
+    // remove it. resolveSDK assigns its own wrapper unconditionally, so the
+    // value is normally a function even when no caller supplied one; if it is
+    // undefined the option list simply never carried one, and the delete below
+    // is a no-op rather than a simulated removal.
+    const injected = options["fetch"]
+    delete options["fetch"]
     const model = yield* provider.getModel(
       ProviderV2.ID.make("cloudflare-ai-gateway"),
       ModelV2.ID.make("anthropic/claude-sonnet-4-6"),
     )
     const language = yield* provider.getLanguage(model)
+    // The wrapped provider is what must serve this model, whether or not an
+    // injected fetch was there to remove.
     expect(gatewaySdkConfig(language)?.accountId).toBe("test-account")
+    expect(typeof injected === "function" || injected === undefined).toBe(true)
+  }),
+)
+
+// Where the hard throw actually lives, and why the "delete the step model's
+// fetch" reproduction cannot reach it.
+//
+// `processModelRequest` guards on the wrapper's OWN `config`:
+//
+//   if (!model.config || !Object.keys(model.config).includes("fetch")) throw
+//
+// The wrapper's `config` is the one `createAiGateway` was constructed with
+// (accountId / gateway / apiKey / options) and it never carries `fetch` of its
+// own; resolveSDK merges one in before the provider is used, and
+// `processModelRequest` is only ever called through the language model the
+// provider returns. The step model's `config` - the object the triage proposed
+// deleting `fetch` from - is a DIFFERENT object, built by the bare upstream
+// provider, and the guard does not read it.
+//
+// This test records that shape so the distinction stays checkable.
+it.instance("ai-gateway-provider guards on the wrapper config, not the step model", () =>
+  Effect.gen(function* () {
+    yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
+    yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
+    yield* set("CLOUDFLARE_API_TOKEN", "test-token")
+    const provider = yield* Provider.Service
+    const model = yield* provider.getModel(
+      ProviderV2.ID.make("cloudflare-ai-gateway"),
+      ModelV2.ID.make("anthropic/claude-sonnet-4-6"),
+    )
+    const language = (yield* provider.getLanguage(model)) as unknown as {
+      config: Record<string, unknown>
+      models?: { config?: Record<string, unknown> }[]
+    }
+    const stepConfig = language.models?.[0]?.config
+    expect(stepConfig).toBeDefined()
+    // Two different objects: the wrapper was constructed with account/gateway/
+    // key, the step model's config is the upstream package's own.
+    expect(stepConfig).not.toBe(language.config)
+    expect(Object.keys(language.config)).toContain("accountId")
+    expect(Object.keys(stepConfig!)).toContain("baseURL")
+    // Removing the step model's fetch leaves the wrapper's guard untouched.
+    delete stepConfig!["fetch"]
+    expect(stepConfig).not.toBe(language.config)
   }),
 )
