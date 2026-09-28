@@ -384,10 +384,9 @@ describe("regressions this must not break", () => {
     () =>
       Effect.gen(function* () {
         const cfg = yield* Config.use.get()
-        // Precedence direction between a project's `.freecode` and `.opencode`
-        // files is deliberately not asserted here (it is a separate, pre-existing
-        // question); what must keep holding is that an OpenCode project file is
-        // still picked up at all.
+        // The precedence direction itself is pinned in the FREE-31 block below;
+        // what must keep holding here is that an OpenCode project file is still
+        // picked up at all.
         expect(cfg.username).toBe("opencode-project")
         expect(cfg.model).toBe("freecode/model")
       }),
@@ -399,6 +398,59 @@ describe("regressions this must not break", () => {
           await fs.mkdir(path.join(dir, ".freecode"), { recursive: true })
           await write(path.join(dir, ".opencode", "opencode.json"), { username: "opencode-project" })
           await write(path.join(dir, ".freecode", "freecode.jsonc"), { model: "freecode/model" })
+        }),
+    },
+  )
+})
+
+/**
+ * FREE-31: the project-level merge order had the compatibility rule backwards —
+ * `.opencode` beat `.freecode`, while FREE-30 fixed the global level to the
+ * opposite direction and `paths.ts` documents "FreeCode file overrides
+ * OpenCode file". Both halves of the project-level lookup are pinned here: the
+ * filenames inside one directory, and the `.freecode`/`.opencode` directory walk.
+ */
+describe("a project's FreeCode config beats its OpenCode one", () => {
+  it.instance(
+    "freecode.jsonc beats opencode.json in the same directory",
+    () =>
+      Effect.gen(function* () {
+        const cfg = yield* Config.use.get()
+        expect(cfg.model).toBe("freecode/model")
+        expect(cfg.username).toBe("freecode-project")
+      }),
+    {
+      git: true,
+      init: (dir) =>
+        Effect.promise(async () => {
+          await write(path.join(dir, "freecode.jsonc"), { model: "freecode/model", username: "freecode-project" })
+          await write(path.join(dir, "opencode.json"), { model: "opencode/model", username: "opencode-project" })
+        }),
+    },
+  )
+
+  it.instance(
+    ".freecode/ beats .opencode/ when both exist",
+    () =>
+      Effect.gen(function* () {
+        const cfg = yield* Config.use.get()
+        expect(cfg.model).toBe("freecode/model")
+        expect(cfg.username).toBe("freecode-project")
+      }),
+    {
+      git: true,
+      init: (dir) =>
+        Effect.promise(async () => {
+          await fs.mkdir(path.join(dir, ".opencode"), { recursive: true })
+          await fs.mkdir(path.join(dir, ".freecode"), { recursive: true })
+          await write(path.join(dir, ".opencode", "opencode.json"), {
+            model: "opencode/model",
+            username: "opencode-project",
+          })
+          await write(path.join(dir, ".freecode", "freecode.jsonc"), {
+            model: "freecode/model",
+            username: "freecode-project",
+          })
         }),
     },
   )
