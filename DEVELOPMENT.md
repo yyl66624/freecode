@@ -1037,6 +1037,54 @@ form, which is the M0-gate question. Follow-up fix, if P0 allows, belongs to
 registered `getModel` for these models instead of relying on the `options.fetch`
 merge, so the wrapped path is structural rather than incidental.
 
+### FREE-26 fix and a correction to the triage above (09-28, `11c33fc`)
+
+The triage section above claims the throw is one incidental key away and that
+deleting `options.fetch` makes it fire. Re-testing while fixing it shows that
+claim was wrong on this tree, and the correction matters more than the fix:
+
+- `resolveSDK` sets `options["fetch"]` unconditionally a few lines above where
+  the gateway branch runs, even when nothing supplied one, so the key is never
+  missing. Deleting `provider.options.fetch` therefore removes nothing that the
+  gateway path depends on.
+- `ai-gateway-provider` also hands the wrapper's per-step model its OWN `config`
+  object (`aigateway(createAnthropic()(…))` → an `AnthropicMessagesLanguageModel`
+  whose `config` carries `fetch`, and `processModelRequest` re-enters that model
+  with the gateway response installed). So neither `processModelRequest`'s
+  model-`config` guard nor its URL-registry guard is reachable through the
+  current chain, wrapped or unwrapped, with or without `options.fetch`.
+- The only way to make the reported error appear is to reach into the live
+  object graph and delete `models[0].config.fetch` by hand; no configuration,
+  environment variable or test form does it. That is a synthetic mutation, not a
+  reachable state, and the triage's "reachable ⇒ RC blocker" conclusion rested
+  on it.
+
+What was actually wrong, and what the fix (`11c33fc`) changes: those models were
+served by the generic `resolveSDK` path (both native noms are in
+`BUNDLED_PROVIDERS`, so the bundled-loader short-circuit won before the provider's
+own `getModel` was ever consulted) — the same category mistake as the two bugs
+recorded in "The path-doubling trap" above: ask the provider, not the generic
+resolver. `openai/*` and `anthropic/*` on `cloudflare-ai-gateway` now resolve
+through that `getModel`, so the SDK the runtime holds is the wrapper's provider
+rather than a bare `@ai-sdk/anthropic` that happens to be wrapped on the way out.
+
+Boundary note for anyone extending this: the wrapped branch has to be chosen
+*before* `BUNDLED_PROVIDERS`, because the natives are bundled; and the gateway
+branch must key on `model.providerID === "cloudflare-ai-gateway"`, not on the
+npm.
+
+**Regression baseline (measured, `11c33fc`):** `bun test test/config
+test/provider test/freecode` → **1289 pass, 3 skip, 2 fail**, and the two fails
+are byte-identical before and after the change:
+
+- creates global jsonc config with schema when no global configs exist
+- native project MCP servers override inherited V1 disabled state
+
+The "5 fail" baseline recorded earlier in this file no longer reproduces on this
+HEAD — three of those five now pass — which is the same run-form drift FREE-26
+was opened over. Treat the pair above as the current measurement and state the
+three elements (value + run form + environment) whenever citing it.
+
 ## Worktree isolation
 
 OpenCode's permission system is not a sandbox, and two agents editing one checkout
