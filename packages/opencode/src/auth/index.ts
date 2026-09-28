@@ -1,9 +1,11 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import path from "path"
+import { existsSync } from "fs"
 import { Effect, Layer, Record, Result, Schema, Context } from "effect"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { Global } from "@opencode-ai/core/global"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { OpenCodeCompat } from "@/freecode/opencode-compat"
 
 export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
 
@@ -55,6 +57,18 @@ const layer = Layer.effect(
     const fsys = yield* FSUtil.Service
     const decode = Schema.decodeUnknownOption(Info)
 
+    // Reads one credential file and keeps only the entries that decode. Never
+    // writes: `set`/`remove` below write to FreeCode's own file exclusively.
+    const readStored = (filepath: string) =>
+      fsys.readJson(filepath).pipe(
+        Effect.orElseSucceed((): Record<string, unknown> => ({})),
+        Effect.map((data) =>
+          Record.filterMap(data as Record<string, unknown>, (value) =>
+            Result.fromOption(decode(value), () => undefined),
+          ),
+        ),
+      )
+
     const all = Effect.fn("Auth.all")(function* () {
       if (process.env.OPENCODE_AUTH_CONTENT) {
         try {
@@ -62,8 +76,14 @@ const layer = Layer.effect(
         } catch (err) {}
       }
 
-      const data = (yield* fsys.readJson(file).pipe(Effect.orElseSucceed(() => ({})))) as Record<string, unknown>
-      return Record.filterMap(data, (value) => Result.fromOption(decode(value), () => undefined))
+      const own = yield* readStored(file)
+      // FREE-30: a machine that already ran OpenCode keeps its credentials in
+      // `~/.local/share/opencode/auth.json`. Read them *underneath* FreeCode's
+      // own file, per key, so migrating users keep every provider and nothing
+      // is copied or written (FreeCode's entry always wins).
+      const compat = OpenCodeCompat.authFile()
+      const inherited = existsSync(compat) ? yield* readStored(compat) : {}
+      return OpenCodeCompat.mergeAuth(own, inherited) as Record<string, Info>
     })
 
     const get = Effect.fn("Auth.get")(function* (providerID: string) {
@@ -72,7 +92,7 @@ const layer = Layer.effect(
 
     const set = Effect.fn("Auth.set")(function* (key: string, info: Info) {
       const norm = key.replace(/\/+$/, "")
-      const data = yield* all()
+      const data = yield* readStored(file)
       if (norm !== key) delete data[key]
       delete data[norm + "/"]
       yield* fsys
@@ -82,7 +102,7 @@ const layer = Layer.effect(
 
     const remove = Effect.fn("Auth.remove")(function* (key: string) {
       const norm = key.replace(/\/+$/, "")
-      const data = yield* all()
+      const data = yield* readStored(file)
       delete data[key]
       delete data[norm]
       yield* fsys.writeJson(file, data, 0o600).pipe(Effect.mapError(fail("Failed to write auth data")))

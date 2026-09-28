@@ -7,6 +7,7 @@ import { Global } from "@opencode-ai/core/global"
 import { bridgeDirectories } from "./router/client"
 import { Worktree } from "./worktree"
 import { ResourceState, load, promote } from "./state"
+import { OpenCodeCompat } from "./opencode-compat"
 import { ProviderTest } from "./provider-test"
 import { SchedulerState } from "./core/state-store"
 import type { ConfigV1 } from "@opencode-ai/core/v1/config/config"
@@ -57,6 +58,12 @@ export interface Input {
    * asked to avoid.
    */
   connectivity?: boolean
+  /**
+   * What an existing OpenCode install left on this machine (FREE-30). Defaults
+   * to probing the filesystem; injectable so the detected branch is testable
+   * without depending on the machine running the test.
+   */
+  opencode?: OpenCodeCompat.Detection
 }
 
 export async function run(input: Input): Promise<Check[]> {
@@ -82,9 +89,10 @@ export async function run(input: Input): Promise<Check[]> {
     group: "Core",
     name: "build",
     status: input.buildSha && input.buildSha !== "unknown" ? "ok" : "warn",
-    detail: input.buildSha && input.buildSha !== "unknown"
-      ? `build ${input.buildSha}${input.buildDirty ? " (dirty)" : " (clean)"}`
-      : "build SHA unknown (binary predates provenance; rebuild with bun run package)",
+    detail:
+      input.buildSha && input.buildSha !== "unknown"
+        ? `build ${input.buildSha}${input.buildDirty ? " (dirty)" : " (clean)"}`
+        : "build SHA unknown (binary predates provenance; rebuild with bun run package)",
     remedy:
       input.buildSha && input.buildSha !== "unknown"
         ? undefined
@@ -136,6 +144,68 @@ export async function run(input: Input): Promise<Check[]> {
     detail: git ?? "not found on PATH",
     remedy: git ? undefined : "Install git; isolation and task merging need it",
   })
+
+  // --- compatibility (FREE-30) -------------------------------------------------
+  //
+  // A machine that already ran OpenCode keeps its providers and credentials under
+  // the `opencode` roots. FreeCode reads them as a read-only fallback, and this is
+  // the one place a user can see whether that is happening. "Detected" and "in
+  // use" are reported as separate facts on purpose: a provider that is still
+  // missing is usually one that was never detected, not one that was ignored.
+  const compat = input.opencode ?? OpenCodeCompat.detect()
+
+  if (compat.configFiles.length === 0) {
+    add({
+      group: "Compatibility",
+      name: "opencode config",
+      status: compat.configEnabled ? "skip" : "warn",
+      detail: compat.configEnabled
+        ? `not detected: ${compat.configDir}`
+        : `not read: OPENCODE_CONFIG_DIR is set, so ${compat.configDir} is ignored`,
+    })
+  } else {
+    add({
+      group: "Compatibility",
+      name: "opencode config",
+      status: "ok",
+      detail: `fallback from ${compat.configDir}: ${compat.configFiles.map((file) => path.basename(file)).join(", ")}; FreeCode's own config wins on conflict`,
+    })
+  }
+
+  if (!compat.authDetected) {
+    add({
+      group: "Compatibility",
+      name: "opencode credentials",
+      status: "skip",
+      detail: `not detected: ${compat.authFile}`,
+    })
+  } else if (!compat.authEnabled) {
+    add({
+      group: "Compatibility",
+      name: "opencode credentials",
+      status: "warn",
+      detail: `detected ${compat.authFile}, but OPENCODE_AUTH_CONTENT overrides credential files so it is not read`,
+    })
+  } else if (compat.authInUse.length > 0) {
+    const overridden = compat.authOverridden.length
+      ? `; ${compat.authOverridden.length} overridden by FreeCode: ${compat.authOverridden.join(", ")}`
+      : ""
+    add({
+      group: "Compatibility",
+      name: "opencode credentials",
+      status: "ok",
+      detail: `using ${compat.authInUse.length} entr${
+        compat.authInUse.length === 1 ? "y" : "ies"
+      } from ${compat.authFile}: ${compat.authInUse.join(", ")}${overridden}`,
+    })
+  } else {
+    add({
+      group: "Compatibility",
+      name: "opencode credentials",
+      status: "ok",
+      detail: `detected ${compat.authFile}; every entry is already configured in FreeCode`,
+    })
+  }
 
   // --- router -----------------------------------------------------------------
 
@@ -387,8 +457,7 @@ function findBridge(): string | undefined {
  * fast and must not load a model to answer a question about a file.
  */
 function warmCheck(bridge: string): string | undefined {
-  const cache =
-    process.env["FREECODE_LAYA_CACHE"] ?? path.join(Global.Path.data, "laya-cache")
+  const cache = process.env["FREECODE_LAYA_CACHE"] ?? path.join(Global.Path.data, "laya-cache")
   const hub = path.join(cache, "hub")
   if (!existsSync(cache)) return undefined
   return existsSync(hub) ? `checkpoints cached under ${cache}` : `cache directory ${cache} is empty`

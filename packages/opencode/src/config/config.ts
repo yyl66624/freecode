@@ -15,6 +15,7 @@ import { InstallationLocal, InstallationVersion } from "@opencode-ai/core/instal
 import { existsSync } from "fs"
 import { Account } from "@/account/account"
 import { FreeCode } from "@/freecode/freecode"
+import { OpenCodeCompat } from "@/freecode/opencode-compat"
 import { Trace } from "@/freecode/trace"
 import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@opencode-ai/core/v1/config/console-state"
@@ -241,7 +242,7 @@ const layer = Layer.effect(
 
     const loadConfig = Effect.fnUntraced(function* (
       text: string,
-      options: { path: string } | { dir: string; source: string },
+      options: { path: string; readOnly?: boolean } | { dir: string; source: string },
       env?: Record<string, string>,
     ) {
       const source = "path" in options ? options.path : options.source
@@ -259,17 +260,22 @@ const layer = Layer.effect(
       yield* Effect.promise(() => resolveLoadedPlugins(data, options.path))
       if (!data.$schema) {
         data.$schema = "https://opencode.ai/config.json"
-        const updated = text.replace(/^\s*\{/, '{\n  "$schema": "https://opencode.ai/config.json",')
-        yield* fs.writeFileString(options.path, updated).pipe(Effect.catch(() => Effect.void))
+        // `readOnly` files belong to another product (an existing OpenCode
+        // install, FREE-30); reading them must not rewrite them, so the
+        // `$schema` convenience is skipped rather than written there.
+        if (!options.readOnly) {
+          const updated = text.replace(/^\s*\{/, '{\n  "$schema": "https://opencode.ai/config.json",')
+          yield* fs.writeFileString(options.path, updated).pipe(Effect.catch(() => Effect.void))
+        }
       }
       return data
     })
 
-    const loadFile = Effect.fnUntraced(function* (filepath: string, env?: Record<string, string>) {
+    const loadFile = Effect.fnUntraced(function* (filepath: string, env?: Record<string, string>, readOnly?: boolean) {
       yield* Effect.logInfo("loading", { path: filepath })
       const text = yield* readConfigFile(filepath)
       if (!text) return {} as Info
-      return yield* loadConfig(text, { path: filepath }, env)
+      return yield* loadConfig(text, { path: filepath, readOnly }, env)
     })
 
     const loadGlobal = Effect.fnUntraced(function* (env?: Record<string, string>) {
@@ -284,6 +290,19 @@ const layer = Layer.effect(
             .pipe(Effect.catch(() => Effect.void))
         }
       }
+
+      // FREE-30: an existing OpenCode install's global config is read as the
+      // lowest-precedence layer, so migrating users keep the providers and
+      // settings they already had. It is read-only — never rewritten — and
+      // every FreeCode file below overrides it key by key, matching the
+      // project-level `.freecode` over `.opencode` rule.
+      if (OpenCodeCompat.configFallbackEnabled()) {
+        for (const name of OpenCodeCompat.configFileNames) {
+          const source = path.join(OpenCodeCompat.configDir(), name)
+          result = mergeConfig(result, yield* loadFile(source, env, true))
+        }
+      }
+
       result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "config.json"), env))
       // FreeCode's own global file wins over an inherited OpenCode one, so a
       // user can migrate by adding settings rather than rewriting in place.
@@ -697,7 +716,11 @@ const layer = Layer.effect(
           // reached disk is the worst version of that.
           yield* fs
             .writeFileString(file, serialized)
-            .pipe(Effect.tapError((error) => Effect.logError("failed to write the global config", { file, error: String(error) })))
+            .pipe(
+              Effect.tapError((error) =>
+                Effect.logError("failed to write the global config", { file, error: String(error) }),
+              ),
+            )
             .pipe(Effect.orDie)
         }
       } else {
@@ -707,7 +730,11 @@ const layer = Layer.effect(
         if (changed) {
           yield* fs
             .writeFileString(file, updated)
-            .pipe(Effect.tapError((error) => Effect.logError("failed to write the global config", { file, error: String(error) })))
+            .pipe(
+              Effect.tapError((error) =>
+                Effect.logError("failed to write the global config", { file, error: String(error) }),
+              ),
+            )
             .pipe(Effect.orDie)
         }
       }
