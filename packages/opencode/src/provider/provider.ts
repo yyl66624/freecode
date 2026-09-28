@@ -857,7 +857,16 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
           // No native Anthropic slug contains a dot, so the blanket replacement is lossless here -
           // unlike OpenAI above, whose native ids (e.g. gpt-4.1) keep their dots and must not be touched.
           if (modelID.startsWith("anthropic/"))
-            return aigateway(createAnthropic()(modelID.slice("anthropic/".length).replaceAll(".", "-")))
+            // `@ai-sdk/anthropic` resolves `ANTHROPIC_BASE_URL` when `createAnthropic()` is called without an
+            // explicit `baseURL`, which rewrites the step model away from the Anthropic host the gateway's
+            // `GATEWAY_PROVIDERS` table matches and makes `ai-gateway-provider` throw before any request is sent.
+            // Pin the native host so a user-set `ANTHROPIC_BASE_URL` (MiniMax/GLM/Kimi setups) cannot hijack this
+            // gateway route.
+            return aigateway(
+              createAnthropic({ baseURL: "https://api.anthropic.com" })(
+                modelID.slice("anthropic/".length).replaceAll(".", "-"),
+              ),
+            )
           // Workers AI is the only first-party provider whose upstream is Cloudflare itself, so it is
           // the only one that should receive the Cloudflare token as its upstream Authorization header.
           // The Unified API addresses Workers AI both with the explicit "workers-ai/" prefix and as

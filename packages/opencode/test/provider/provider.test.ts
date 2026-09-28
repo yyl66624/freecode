@@ -2217,3 +2217,29 @@ it.instance("ai-gateway-provider guards on the step model config, not the wrappe
     expect(stepConfig).not.toBe(language.config)
   }),
 )
+
+// FREE-35 regression. The `anthropic/*` passthrough client must not inherit
+// `ANTHROPIC_BASE_URL` from the process environment. `@ai-sdk/anthropic` resolves
+// that variable whenever `createAnthropic()` is called without an explicit
+// `baseURL`, and the rewritten host matches no `GATEWAY_PROVIDERS` pattern, so
+// `ai-gateway-provider@3.2.0` throws `provider "anthropic.messages" is currently
+// not supported` (dist/index.mjs:577) before any request reaches the gateway.
+// Pinning the step model's baseURL to the native Anthropic host keeps the
+// gateway routing structural instead of dependent on the caller's environment.
+it.instance("cloudflare-ai-gateway anthropic passthrough ignores ANTHROPIC_BASE_URL", () =>
+  Effect.gen(function* () {
+    yield* set("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
+    yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
+    yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
+    yield* set("CLOUDFLARE_API_TOKEN", "test-token")
+    const provider = yield* Provider.Service
+    const model = yield* provider.getModel(
+      ProviderV2.ID.make("cloudflare-ai-gateway"),
+      ModelV2.ID.make("anthropic/claude-sonnet-4-6"),
+    )
+    const language = (yield* provider.getLanguage(model)) as unknown as {
+      models?: { config?: { baseURL?: string } }[]
+    }
+    expect(language.models?.[0]?.config?.baseURL).toBe("https://api.anthropic.com/v1")
+  }),
+)

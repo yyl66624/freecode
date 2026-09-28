@@ -165,8 +165,12 @@ function extractUpstreamHeaders(body: unknown): Record<string, unknown> | undefi
 function gatewayModel(apiId: string, gatewayToken = "test") {
   const aigateway = createAiGateway({ accountId: "test", gateway: "test", apiKey: gatewayToken })
   if (apiId.startsWith("openai/")) return aigateway(createOpenAI()(apiId.slice("openai/".length)))
+  // FREE-35: the runtime pins `baseURL` so a user-set ANTHROPIC_BASE_URL cannot rewrite the step host
+  // away from the pattern the gateway matches; mirror that here or this file stops representing runtime.
   if (apiId.startsWith("anthropic/"))
-    return aigateway(createAnthropic()(apiId.slice("anthropic/".length).replaceAll(".", "-")))
+    return aigateway(
+      createAnthropic({ baseURL: "https://api.anthropic.com" })(apiId.slice("anthropic/".length).replaceAll(".", "-")),
+    )
   const isWorkersAi = apiId.startsWith("workers-ai/") || apiId.startsWith("@cf/")
   const unified = createUnified(isWorkersAi ? { apiKey: gatewayToken } : {})
   return aigateway(unified(apiId))

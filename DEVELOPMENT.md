@@ -1099,6 +1099,11 @@ ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic \
   bun test test/provider/cf-ai-gateway-e2e.test.ts                    # 9 pass / 4 fail
 ```
 
+> The 9/4 line is the pre-FREE-35 state. That helper now pins its `baseURL` too
+> (mirroring the fixed runtime), so the command no longer flips with the
+> variable; the runtime behaviour itself is guarded by the named regression test
+> in `test/provider/provider.test.ts` (see FREE-35 below).
+
 Isolated one variable at a time: `ANTHROPIC_AUTH_TOKEN` alone → 13/0;
 `ANTHROPIC_MODEL` alone → 13/0; **`ANTHROPIC_BASE_URL` alone → 9/4**. The
 expect() count drops 35 → 24 with it, i.e. the four anthropic cases abort early.
@@ -1110,18 +1115,37 @@ Mechanism, and it is the same defect class the 09-25 log already documents
    `loadOptionalSetting({ settingValue: options.baseURL, environmentVariableName: "ANTHROPIC_BASE_URL" })`
    — `createAnthropic()("m")` with the variable set yields
    `config.baseURL === "https://api.minimaxi.com/anthropic"`. Measured.
-2. `cf-ai-gateway-e2e.test.ts` builds its step models that way (`gatewayModel`
-   at the bottom of the file calls the bare `createAnthropic()(…)`) and stubs
-   `globalThis.fetch` to answer only `https://gateway.ai.cloudflare.com/`.
+2. `cf-ai-gateway-e2e.test.ts` built its step models the same way (`gatewayModel`
+   called the bare `createAnthropic()(…)`; pinned by FREE-35 to pass an explicit
+   `baseURL`, mirroring the runtime) and stubs `globalThis.fetch` to answer only
+   `https://gateway.ai.cloudflare.com/`.
 3. `ai-gateway-provider`'s request pass then matches the recorded request URL
    against `GATEWAY_PROVIDERS` host patterns (`api.anthropic.com`, …). A URL
    rewritten to the MiniMax host matches nothing, so the second throw fires
    (`if (!providerConfig) throw new Error('Sorry, but provider "..." …')`).
 
-So the 4 failures are a **test-environment artifact caused by an inherited
-variable**, not a fixture defect and not anything FreeCode's runtime does. They
-disappear with the variable unset. The runtime path is unaffected: FreeCode
-always passes its own `options` to the provider it resolves.
+**Correction (09-28, FREE-35).** The paragraph that used to stand here called
+those 4 failures a "test-environment artifact" and claimed "the runtime path is
+unaffected: FreeCode always passes its own `options` to the provider it
+resolves". That was wrong. The FREE-12 probe (`01a0e79f`) measured the runtime
+path: `getModel` called the bare `createAnthropic()` there too
+(`packages/opencode/src/provider/provider.ts:859`), and `ai-gateway-provider`'s
+`authWrapper` only fills in `apiKey`, so `@ai-sdk/anthropic` resolved
+`ANTHROPIC_BASE_URL` into the runtime step model's `baseURL` as well. The
+rewritten URL matched no `GATEWAY_PROVIDERS` pattern and
+`ai-gateway-provider@3.2.0` threw site B (`dist/index.mjs:577:35`) before any
+network call. Measured through the real runtime: with `ANTHROPIC_BASE_URL` set →
+`Sorry, but provider "anthropic.messages" …`; with it unset → `Your AI Gateway
+has authentication active, but you didn't provide a valid apiKey` (the gateway
+was reached).
+
+The gateway path now pins `baseURL: "https://api.anthropic.com"` when building
+the Anthropic passthrough client, so a user-set `ANTHROPIC_BASE_URL`
+(MiniMax/GLM/Kimi setups) can no longer hijack that route. `openai/*` reads
+`OPENAI_BASE_URL` by the same mechanism and is **not** pinned yet. Regression
+guard: `test/provider/provider.test.ts` "cloudflare-ai-gateway anthropic
+passthrough ignores ANTHROPIC_BASE_URL" — fails against the bare call, passes
+against the pinned one.
 
 **Rule for every future run of these suites** (this is what the 09-25 note meant
 by "state the three elements"; it is now specific):
