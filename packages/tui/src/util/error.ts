@@ -1,4 +1,5 @@
 import { isRecord } from "./record"
+import { TUI_PRODUCT } from "../freecode-identity"
 
 type ConfigIssue = { message: string; path: string[] }
 
@@ -24,8 +25,8 @@ export function cliErrorMessage(input: unknown): string | undefined {
     return [
       `Model not found: ${field(model, "providerID")}/${field(model, "modelID")}`,
       ...(suggestions.length ? ["Did you mean: " + suggestions.join(", ")] : []),
-      "Try: `opencode models` to list available models",
-      "Or check your config (opencode.json) provider/model names",
+      `Try: \`${TUI_PRODUCT.binary} models\` to list available models`,
+      `Or check your config (${TUI_PRODUCT.binary}.json) provider/model names`,
     ].join("\n")
   }
 
@@ -54,7 +55,7 @@ export function cliErrorMessage(input: unknown): string | undefined {
     return [
       `Failed to load remote config${remote ? ` from ${remote}` : ""}: the server returned a login page instead of JSON.`,
       "Authentication is missing or has expired (the endpoint is likely behind an SSO or identity-aware proxy).",
-      ...(url ? [`Run \`opencode auth login ${url}\` to re-authenticate.`] : []),
+      ...(url ? [`Run \`${TUI_PRODUCT.binary} auth login ${url}\` to re-authenticate.`] : []),
     ].join("\n")
   }
 
@@ -81,7 +82,7 @@ export function cliErrorMessage(input: unknown): string | undefined {
   if (tagged(input, "UICancelledError") || named(input, "UICancelledError")) return ""
   if (isRecord(input) && named(input, "MCPFailed")) {
     const name = isRecord(input.data) ? field(input.data, "name") : undefined
-    return `MCP server "${name}" failed. Note, opencode does not support MCP authentication yet.`
+    return `MCP server "${name}" failed. Note, ${TUI_PRODUCT.name} does not support MCP authentication yet.`
   }
   return undefined
 }

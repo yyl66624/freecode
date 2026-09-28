@@ -15,6 +15,8 @@ export const Product = {
   globalConfigDir: "freecode",
   /** Project-local config directory name. */
   projectConfigDir: ".freecode",
+  /** FreeCode docs entry point. The TUI help/docs links open this. */
+  docsUrl: "https://github.com/yyl66624/freecode/blob/main/docs/README.md",
 } as const
 
 /**
