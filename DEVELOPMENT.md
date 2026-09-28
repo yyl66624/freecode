@@ -1085,16 +1085,63 @@ HEAD — three of those five now pass — which is the same run-form drift FREE-
 was opened over. Treat the pair above as the current measurement and state the
 three elements (value + run form + environment) whenever citing it.
 
-### FREE-26: what the hard throw actually guards (measured, `175a4b3`)
+### FREE-26: the 9/4 vs 13/0 split is `ANTHROPIC_BASE_URL` (root cause, measured)
 
-Earlier notes here describe deleting `models[0].config.fetch` as the way to
-reach `Sorry, but provider "anthropic.messages" is currently not supported`,
-and one revision of this section then described the guard as reading "the
-wrapper's own config". **Both are wrong**, in opposite directions, and the
-correct mechanism matters because it is what makes the throw unreachable:
+FreeCode spent three days (09-25 → 09-28) chasing this as an unreconciled
+environment fingerprint, with `@ai-sdk/gateway` hash variants listed as the prime
+suspect. The actual cause is one inherited environment variable, and it is
+reproducible in one command:
+
+```sh
+cd packages/opencode
+bun test test/provider/cf-ai-gateway-e2e.test.ts                      # 13 pass / 0 fail
+ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic \
+  bun test test/provider/cf-ai-gateway-e2e.test.ts                    # 9 pass / 4 fail
+```
+
+Isolated one variable at a time: `ANTHROPIC_AUTH_TOKEN` alone → 13/0;
+`ANTHROPIC_MODEL` alone → 13/0; **`ANTHROPIC_BASE_URL` alone → 9/4**. The
+expect() count drops 35 → 24 with it, i.e. the four anthropic cases abort early.
+
+Mechanism, and it is the same defect class the 09-25 log already documents
+(everything below is grep-verified in the installed packages):
+
+1. `@ai-sdk/anthropic@3.0.111`'s `createAnthropic()` takes its base URL from
+   `loadOptionalSetting({ settingValue: options.baseURL, environmentVariableName: "ANTHROPIC_BASE_URL" })`
+   — `createAnthropic()("m")` with the variable set yields
+   `config.baseURL === "https://api.minimaxi.com/anthropic"`. Measured.
+2. `cf-ai-gateway-e2e.test.ts` builds its step models that way (`gatewayModel`
+   at the bottom of the file calls the bare `createAnthropic()(…)`) and stubs
+   `globalThis.fetch` to answer only `https://gateway.ai.cloudflare.com/`.
+3. `ai-gateway-provider`'s request pass then matches the recorded request URL
+   against `GATEWAY_PROVIDERS` host patterns (`api.anthropic.com`, …). A URL
+   rewritten to the MiniMax host matches nothing, so the second throw fires
+   (`if (!providerConfig) throw new Error('Sorry, but provider "..." …')`).
+
+So the 4 failures are a **test-environment artifact caused by an inherited
+variable**, not a fixture defect and not anything FreeCode's runtime does. They
+disappear with the variable unset. The runtime path is unaffected: FreeCode
+always passes its own `options` to the provider it resolves.
+
+**Rule for every future run of these suites** (this is what the 09-25 note meant
+by "state the three elements"; it is now specific):
+
+```sh
+unset $(env | grep -oiE '^(ANTHROPIC|CLOUDFLARE|CF_)[A-Z_]*' | tr '\n' ' ')
+```
+
+`ANTHROPIC_*` in particular is injected into this workspace's processes by the
+agent runtime's model routing, so it is present in some sessions and absent in
+others — which is exactly why two observers on the same commit saw 9/4 and 13/0
+for three days.
+
+### FREE-26: what the hard throw actually guards
+
+The throw above (`Sorry, but provider "…" is currently not supported`) has two
+sites in `ai-gateway-provider@3.2.0/dist/index.mjs`. Measured directly:
 
 ```js
-// ai-gateway-provider@3.2.0 dist/index.mjs:554-560
+// :554-560  (site A)
 async processModelRequest(options, modelMethod) {
   const requests = [];
   for (const model of this.models) {                       // model = this.models[step]
@@ -1103,66 +1150,58 @@ async processModelRequest(options, modelMethod) {
     model.config.fetch = (url, request) => { … }           // installed unconditionally right after
 ```
 
-Three facts, each measured:
+```js
+// :570-577  (site B) - the one the reported stack traced
+const body = await Promise.all(requests.map(async (req) => {
+  let providerConfig = null
+  for (const provider of providers) if (provider.regex.test(req.url)) { … }
+  if (!providerConfig) throw new Error(`Sorry, but provider "${req.modelProvider}" …`)
+```
 
-1. The guard reads **`this.models[step].config`** — the step model's config, not
-   `this.config` (the wrapper's own, whose keys are `accountId` / `gateway` /
-   `apiKey` / `options`). The earlier "wrapper's own config" wording was
-   backwards.
-2. The very next line **installs** `fetch` on that same config unconditionally.
-   So the guard does not require a `fetch` to have arrived from anywhere — it
-   requires the step model to *have a config object at all*, which
-   `@ai-sdk/anthropic`'s `AnthropicMessagesLanguageModel` always does.
-3. Consequently the throw is unreachable by construction: there is no way to
-   build a step model through the supported constructors that lacks a config.
+Two corrections to earlier revisions of this section, both about site A:
 
-| Mutation | Result (measured, `175a4b3`) |
-| --- | --- |
-| delete `models[0].config.fetch`, call the step's `doGenerate` | request still goes to `gateway.ai.cloudflare.com`; surfaces the gateway's own `invalid x-api-key` |
-| delete `models[0].config.fetch`, call `processModelRequest` | same — the loop reinstalls it before the guard matters |
-| no mutation at all | same |
+- The guard reads **`this.models[step].config`** — the step model's config — not
+  `this.config` (the wrapper's own: `accountId` / `gateway` / `apiKey` /
+  `options`). An earlier revision said "the wrapper's own config", which is
+  backwards; the `1736527` case is now named "guards on the step model config,
+  not the wrapper config" to match.
+- Deleting `models[0].config.fetch` provably does not reach it: the loop
+  installs `fetch` on the very next line, so the guard only requires a config
+  object to exist. Measured: the request still goes to
+  `gateway.ai.cloudflare.com` and surfaces the gateway's own `invalid x-api-key`.
 
-`11c33fc` is unaffected by this correction: it fixed the bundled-loader
+What is **not** claimed here: that site A is unreachable in every real FreeCode
+path. The honest statement is that it was never observed in real use, and that
+the observed failures came from site B via the `ANTHROPIC_BASE_URL` artifact
+above. Nothing in FreeCode's runtime was shown to build a step model without a
+`config`, but no proof of the converse is recorded either.
+
+`11c33fc` is unaffected by all of this: it fixed the bundled-loader
 short-circuit bypassing the provider's `getModel` (a real path-correctness
-defect), not a user-visible failure. The `1736527` case now named
-"guards on the step model config, not the wrapper config" pins the two-object
-structure so this cannot drift back into "delete the step fetch and watch it
-throw".
+defect where the wrapper was never called), not a user-visible failure.
 
 ### FREE-26 baseline numbers: which fingerprint they belong to (09-28)
 
-The fail counts quoted around FREE-26 come from two different observers whose
-environment fingerprints have never been reconciled, so neither is "the"
-baseline on its own:
+The fail counts quoted around FREE-26 came from two observers whose environments
+differed by one variable. The split is now resolved (see the `ANTHROPIC_BASE_URL`
+section above), and the numbers below are what to cite:
 
-| Side | Form | `test/config test/provider test/freecode` |
-| --- | --- | --- |
-| 13/0 side (core-dev, qa, pace) | serial, cwd `packages/opencode`, `.runtime/bin/bun` 1.4.2 | **~1290 pass / 3 skip / 2 fail** |
-| 9/4 side (the dissenting observer) | described as the same form | reported ~1285 pass / 3 skip / 6 fail (the 2 above plus 4 cf-ai-gateway) |
+| Form | `test/config test/provider test/freecode` |
+| --- | --- |
+| serial, cwd `packages/opencode`, `.runtime/bin/bun` 1.4.2, **no `ANTHROPIC_*` in the environment** | **1290 pass / 3 skip / 2 fail** |
+| same, with `ANTHROPIC_BASE_URL` inherited | 1286 pass / 3 skip / 6 fail (the 2 below plus 4 cf-ai-gateway) |
+| `cf-ai-gateway-e2e.test.ts` alone, no `ANTHROPIC_*` | 13 pass / 0 fail |
+| `cf-ai-gateway-e2e.test.ts` alone, `ANTHROPIC_BASE_URL` set | 9 pass / 4 fail |
 
-**Read this literally:** the 2-fail figure is the **13/0 side's fingerprint
-measurement** (core-dev / qa / pace) — it is not the baseline for the other
-side, and citing it as "the" baseline repeats the mistake FREE-26 exists to
-document. Under the 9/4 side's fingerprint the full suite reports 6 fail: the
-same 2 config/MCP cases plus 4 from `cf-ai-gateway-e2e.test.ts`. Those 4 are the
-test harness's own (it calls `ai-gateway-provider` directly and never reaches
-FreeCode's `resolveSDK`), orthogonal to the `11c33fc` fix, and tracked rather
-than blocking. Where the two sides disagree, this project takes the majority
-(13/0) side — the 09-25 2:1 rule — which is why 2 fail is the number to quote
-without the caveat spelled out, but only ever *with* the fingerprint named.
+The 2 failures below are the project's real baseline — they ship with the
+upstream snapshot and are identical before and after every FreeCode change
+recorded here:
 
-The "5 fail" figure recorded earlier in this file predates both sides' current
-measurements and no longer reproduces on this HEAD.
+- creates global jsonc config with schema when no global configs exist
+- native project MCP servers override inherited V1 disabled state
 
-Re-measured 09-28 (`4f296d0`) on three dependency views — the repo root store,
-`.runtime/qa-free31/wt-288c00a` and `.runtime/qa-free31/wt-c4604f6` (both
-detached worktrees carrying their own `node_modules/.bun`) — all three resolve
-`@ai-sdk/anthropic@3.0.111+d6123d32214422cb`, `ai-gateway-provider@3.2.0+39911914b0439de0`
-and the same `@ai-sdk/provider-utils` set, and all three run
-`cf-ai-gateway-e2e.test.ts` at **13/0**. So a divergent store or hash does not
-explain the split on this machine, and the `@ai-sdk/gateway` hash variants
-flagged earlier are on a different code path (`anthropic/*` resolves
-`@ai-sdk/anthropic`, not `@ai-sdk/gateway`).
+The "5 fail" figure recorded earlier in this file predates all of this and no
+longer reproduces on this HEAD.
 
 ## Worktree isolation
 
