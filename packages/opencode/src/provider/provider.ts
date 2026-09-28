@@ -1868,7 +1868,21 @@ const layer = Layer.effect(
           return wrapSSE(res, chunkTimeout, chunkAbortCtl)
         }
 
-        const bundledLoader = BUNDLED_PROVIDERS[model.api.npm]
+        // Opening the gateway for these models requires our own wrapper: it
+        // addresses the model as Cloudflare routes it (per-step `provider` /
+        // `endpoint` on the gateway envelope) and it strips the CF temp token
+        // from the upstream headers, so the gateway's own token never becomes
+        // the upstream provider's Authorization / x-api-key. Resolving the
+        // catalog's native npm alone leaves a bare SDK behind the gateway and
+        // relies on the generic `options.fetch` above to stay load-bearing;
+        // drop that one key anywhere and the user meets
+        // `Sorry, but provider "anthropic.messages" is currently not supported`.
+        // The native npm is bundled (`@ai-sdk/anthropic` / `@ai-sdk/openai`), so
+        // this has to be decided before the bundled-loader short-circuit.
+        const gatewayModel = s.modelLoaders[model.providerID]
+        const gatewayWrapped = model.providerID === "cloudflare-ai-gateway" && Boolean(gatewayModel)
+
+        const bundledLoader = gatewayWrapped ? undefined : BUNDLED_PROVIDERS[model.api.npm]
         if (bundledLoader) {
           const factory = await bundledLoader()
           const loaded = factory({
@@ -1880,6 +1894,11 @@ const layer = Layer.effect(
         }
 
         const installedPath = await (async () => {
+          if (gatewayWrapped) {
+            const entry = await Npm.add("ai-gateway-provider")
+            if (!entry.entrypoint) throw new Error(`Package ${model.api.npm} has no import entrypoint`)
+            return entry.entrypoint
+          }
           if (model.api.npm.startsWith("file://")) {
             return model.api.npm
           }
@@ -1892,6 +1911,27 @@ const layer = Layer.effect(
         // only path inputs so Node on Windows accepts the dynamic import.
         const importSpec = installedPath.startsWith("file://") ? installedPath : pathToFileURL(installedPath).href
         const mod = await import(importSpec)
+
+        // A gateway model is served by the wrapper, so hand back the provider
+        // our own loader builds (aigateway(...)) rather than whatever the
+        // module's `create*` export happens to return. The gateway addresses
+        // the model itself (per-step `provider` / `endpoint` on the envelope,
+        // and the request only reaches Cloudflare because the wrapper rewrites
+        // the URL), so the wrapped provider is what the runtime must hold.
+        //
+        // This path no longer depends on the generic `options.fetch` merge:
+        // the wrapper carries the gateway credentials and builds its own step
+        // models, so the SDK handed back is the one the provider re-exported.
+        if (gatewayWrapped) {
+          const wrapped = await gatewayModel!(
+            {} as SDK,
+            model.api.id,
+            { ...provider.options, ...model.options },
+            model,
+          )
+          s.sdk.set(key, wrapped)
+          return wrapped
+        }
 
         const fn = mod[Object.keys(mod).find((key) => key.startsWith("create"))!]
         const loaded = fn({

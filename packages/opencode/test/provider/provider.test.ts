@@ -2116,3 +2116,51 @@ it.effect("opencode loader keeps paid models when auth exists", () =>
     expect(keyedCount).toBeGreaterThan(0)
   }).pipe(provideMultiInstance),
 )
+
+// FREE-26 regression. `cloudflare-ai-gateway` models whose catalog npm is a
+// native passthrough package (`openai/*` -> @ai-sdk/openai, `anthropic/*` ->
+// @ai-sdk/anthropic) are bundled (`BUNDLED_PROVIDERS`) and so used to resolve
+// through the generic path, which hands back a bare upstream provider for the
+// gateway to wrap. They must instead resolve through the provider's own
+// `getModel`, so the SDK the runtime holds is the wrapper's own provider.
+//
+// The wrapper is recognisable by its per-model config: `createAiGateway(...)`
+// records the account and gateway there, and a bare `@ai-sdk/anthropic`
+// provider has no such field.
+const gatewaySdkConfig = (language: unknown) =>
+  (language as { config?: { accountId?: string; gateway?: string } }).config
+
+it.instance("cloudflare-ai-gateway passthrough models resolve the gateway wrapper", () =>
+  Effect.gen(function* () {
+    yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
+    yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
+    yield* set("CLOUDFLARE_API_TOKEN", "test-token")
+    const provider = yield* Provider.Service
+    const model = yield* provider.getModel(
+      ProviderV2.ID.make("cloudflare-ai-gateway"),
+      ModelV2.ID.make("anthropic/claude-sonnet-4-6"),
+    )
+    const language = yield* provider.getLanguage(model)
+    expect(gatewaySdkConfig(language)?.accountId).toBe("test-account")
+    expect(gatewaySdkConfig(language)?.gateway).toBe("test-gateway")
+  }),
+)
+
+it.instance("cloudflare-ai-gateway passthrough models resolve without an injected fetch", () =>
+  Effect.gen(function* () {
+    yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
+    yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
+    yield* set("CLOUDFLARE_API_TOKEN", "test-token")
+    const provider = yield* Provider.Service
+    const providers = yield* provider.list()
+    // The generic path is the one that depends on this key; the wrapper's own
+    // path must not.
+    delete (providers[ProviderV2.ID.make("cloudflare-ai-gateway")].options as Record<string, unknown>)["fetch"]
+    const model = yield* provider.getModel(
+      ProviderV2.ID.make("cloudflare-ai-gateway"),
+      ModelV2.ID.make("anthropic/claude-sonnet-4-6"),
+    )
+    const language = yield* provider.getLanguage(model)
+    expect(gatewaySdkConfig(language)?.accountId).toBe("test-account")
+  }),
+)
