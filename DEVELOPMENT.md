@@ -954,22 +954,22 @@ environment artefact to re-check, not a regression. Only a **stably
 reproducible form — same form, 2 consecutive runs, same fails, confirmed by
 an independent second observer** — may change the baseline numbers above.
 
-### FREE-26 fingerprint corrections (09-28, superseding the 09-25 13/0 entry)
+### FREE-26 fingerprint corrections (09-28, recomputed first-hand)
 
-Two statements recorded in the section above are wrong and must not be cited:
+The 09-25 entry above lists environment fingerprints that do not survive a
+re-check. Measured again on `318bff6`:
 
-1. **"`node_modules` resolves to per-worktree store, not the root store" —
-   wrong.** The cwd's `node_modules` is a real directory, not a symlink; there
-   is exactly **one** `node_modules/.bun` (the workspace root's store), shared
-   by every worktree. `readlink -f node_modules` therefore resolves to itself.
-2. **"a second detached worktree `.docbuild` exists and carries its own
-   `node_modules/.bun/`" — wrong.** `.docbuild` has **no `node_modules` at all**,
-   so it cannot be the source of a divergent dependency resolution.
+| Claim (09-25) | Measured (09-28) |
+| --- | --- |
+| "`node_modules` resolves to a per-worktree store, not the root store" | `packages/opencode/node_modules` has **no `.bun`**; only the repo root has one (`opencode-dev/node_modules/.bun`, 2621 entries). Resolution from `packages/opencode` finds `node_modules/.bun/ai-gateway-provider@3.2.0+39911914b0439de0` at the **root** store. Not per-worktree. |
+| "`.docbuild` carries its own `node_modules/.bun/`" | `.docbuild/node_modules/.bun` **does exist** (≈20 entries, written Sep 24 23:24) and does contain `ai-gateway-provider@3.2.0+39911914b0439de0`. Its package set is much smaller than the root's 2621. |
+| "three `@ai-sdk+gateway` hash variants are a prime suspect" | The three variants exist, but the model under test (`anthropic/*`) resolves `@ai-sdk/anthropic` and `ai-gateway-provider` — not `@ai-sdk/gateway`. The unresolved variant is not on this path. |
 
-Consequence: the "two sides ran against different stores" hypothesis is dead,
-and with it the only concrete explanation for the 9/4-vs-13/0 split that was on
-record. The 9/4 side's fingerprint was never captured, so the split stays
-unreconciled — but it is no longer attributable to a worktree-local store.
+Net: the divergent-store hypothesis is **not** dead, but it is also not what the
+09-25 note said. There are two stores (root and `.docbuild`), and every FREE-26
+run recorded so far used the root one; matching `ai-gateway-provider` hash on
+both sides makes a version-skew explanation for the 9/4-vs-13/0 split unlikely
+but does not rule out a different `node_modules` state entirely.
 
 ### FREE-26 reachability triage (09-28): the unwrapped-provider path IS live
 
