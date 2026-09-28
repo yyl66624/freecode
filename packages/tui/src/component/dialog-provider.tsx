@@ -59,10 +59,10 @@ export function providerOptions(list: { id: string; name: string }[]): ProviderO
         value: provider.id,
         providerID: provider.id,
         description: {
-          opencode: "(Recommended)",
+          opencode: "(upstream, recommended)",
           anthropic: "(API key)",
           openai: "(ChatGPT Plus/Pro or API key)",
-          "opencode-go": "Low cost subscription for everyone",
+          "opencode-go": "Upstream service — low cost subscription",
         }[provider.id],
         category: provider.id in PROVIDER_PRIORITY ? "Popular" : "Providers",
       })),
@@ -96,7 +96,7 @@ export function createDialogProviderOptions() {
       placeholder: "Provider id",
       description: () => (
         <text fg={theme.textMuted}>
-          This only stores a credential. Configure the provider in opencode.json to use it.
+          This only stores a credential. Configure the provider in freecode.json to use it.
         </text>
       ),
     })
@@ -371,8 +371,8 @@ function ApiMethod(props: ApiMethodProps) {
           opencode: (
             <box gap={1}>
               <text fg={theme.textMuted}>
-                OpenCode Zen gives you access to all the best coding models at the cheapest prices with a single API
-                key.
+                OpenCode Zen is an upstream OpenCode service: all the best coding models at the cheapest prices with a
+                single API key.
               </text>
               <text fg={theme.text}>
                 Go to <span style={{ fg: theme.primary }}>https://opencode.ai/zen</span> to get a key
@@ -382,8 +382,8 @@ function ApiMethod(props: ApiMethodProps) {
           "opencode-go": (
             <box gap={1}>
               <text fg={theme.textMuted}>
-                OpenCode Go is a $10 per month subscription that provides reliable access to popular open coding models
-                with generous usage limits.
+                OpenCode Go is an upstream OpenCode service: a $10 per month subscription that provides reliable access
+                to popular open coding models with generous usage limits.
               </text>
               <text fg={theme.text}>
                 Go to <span style={{ fg: theme.primary }}>https://opencode.ai/go</span> and enable OpenCode Go
@@ -407,7 +407,7 @@ function ApiMethod(props: ApiMethodProps) {
         if (props.custom && !sync.data.provider_next.all.some((provider) => provider.id === props.providerID)) {
           toast.show({
             variant: "info",
-            message: `Saved credential for ${props.providerID}. Configure it in opencode.json to use it.`,
+            message: `Saved credential for ${props.providerID}. Configure it in freecode.json to use it.`,
           })
           dialog.clear()
           return

@@ -1,6 +1,9 @@
+import { TUI_PRODUCT } from "../freecode-identity"
+
 const logo = {
-  left: ["                   ", "█▀▀█ █▀▀█ █▀▀█ █▀▀▄", "█__█ █__█ █^^^ █__█", "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀~~▀"],
-  right: ["             ▄     ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"],
+  // FreeCode wordmark, same 4x4 block idiom as the TUI home logo.
+  left: ["                   ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█^^^ █▀▀▀ █^^^ █^^^", "█    ▀~~▀ ▀▀▀▀ ▀▀▀▀"],
+  right: ["   ▄         ▄     ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"],
 }
 
 const reset = "\x1b[0m"
@@ -32,7 +35,7 @@ export function sessionEpilogue(input: { title: string; sessionID?: string }) {
     ...wordmark("  "),
     "",
     `  ${weak("Session")}${bold}${input.title}${reset}`,
-    `  ${weak("Continue")}${bold}opencode -s ${input.sessionID}${reset}`,
+    `  ${weak("Continue")}${bold}${TUI_PRODUCT.binary} -s ${input.sessionID}${reset}`,
     "",
   ].join("\n")
 }

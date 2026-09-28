@@ -24,11 +24,11 @@ export const UpgradeCommand = {
     UI.empty()
     UI.println(UI.logo("  "))
     UI.empty()
-    prompts.intro("Upgrade")
+    prompts.intro("Upgrade FreeCode")
     const detectedMethod = await Installation.method()
     const method = (args.method as Installation.Method) ?? detectedMethod
     if (method === "unknown") {
-      prompts.log.error(`opencode is installed to ${process.execPath} and may be managed by a package manager`)
+      prompts.log.error(`freecode is installed to ${process.execPath} and may be managed by a package manager`)
       const install = await prompts.select({
         message: "Install anyways?",
         options: [
@@ -46,7 +46,7 @@ export const UpgradeCommand = {
     const target = args.target ? args.target.replace(/^v/, "") : await Installation.latest()
 
     if (InstallationVersion === target) {
-      prompts.log.warn(`opencode upgrade skipped: ${target} is already installed`)
+      prompts.log.warn(`freecode upgrade skipped: ${target} is already installed`)
       prompts.outro("Done")
       return
     }
