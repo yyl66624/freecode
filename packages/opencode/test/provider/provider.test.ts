@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, beforeAll, expect, test } from "bun:test"
 import { mkdir, unlink } from "fs/promises"
 import path from "path"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -7,6 +7,7 @@ import { Effect, Layer } from "effect"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { Npm } from "@opencode-ai/core/npm"
 import { Global } from "@opencode-ai/core/global"
 import { disposeAllInstances, provideInstanceEffect, tmpdirScoped, TestInstance } from "../fixture/fixture"
 import { markPluginDependenciesReady } from "../fixture/plugin"
@@ -86,6 +87,26 @@ const languageBaseURL = (language: unknown) => (language as { config: { baseURL:
 
 const it = testEffect(LayerNode.compile(LayerNode.group([Provider.node, Env.node, Plugin.node])))
 const experimentalModels = testEffect(providerLayer({ enableExperimentalModels: true }))
+
+// The `cloudflare-ai-gateway` passthrough tests are the only tests in this file
+// that call `Provider.getLanguage` on a gateway-wrapped model, and that path runs
+// `Npm.add("ai-gateway-provider")`. `Npm.add` resolves the package inside the
+// per-process test cache from `test/preload.ts` (`XDG_CACHE_HOME` is redirected to
+// `opencode-test-data-<pid>`), so the first call in each test process performs a
+// real install through `@npmcli/arborist`: ~1.5-2s for resolve/install plus ~2-3s
+// of first-touch arborist module load on a cold runner. Whichever such test runs
+// first therefore absorbs the whole cost and can cross `bun test`'s 5000ms default
+// — measured cold 5054ms (fail) vs 2323ms once the process's transpile cache is
+// warm, and 131ms for the same test late in a file-wide run.
+//
+// Warm the path once, outside the per-test budget, so no single test carries the
+// cold cost and any `-t` filter that selects one of them still passes.
+beforeAll(async () => {
+  // Best-effort: with no registry reachable the gateway tests below fail on their
+  // own, exactly as they did before this warm-up existed. The hook must not take
+  // the rest of the file down with it.
+  await Npm.add("ai-gateway-provider").catch(() => {})
+}, 30_000)
 
 const alphaProviderConfig = {
   provider: {
@@ -2226,20 +2247,27 @@ it.instance("ai-gateway-provider guards on the step model config, not the wrappe
 // not supported` (dist/index.mjs:577) before any request reaches the gateway.
 // Pinning the step model's baseURL to the native Anthropic host keeps the
 // gateway routing structural instead of dependent on the caller's environment.
-it.instance("cloudflare-ai-gateway anthropic passthrough ignores ANTHROPIC_BASE_URL", () =>
-  Effect.gen(function* () {
-    yield* set("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
-    yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
-    yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
-    yield* set("CLOUDFLARE_API_TOKEN", "test-token")
-    const provider = yield* Provider.Service
-    const model = yield* provider.getModel(
-      ProviderV2.ID.make("cloudflare-ai-gateway"),
-      ModelV2.ID.make("anthropic/claude-sonnet-4-6"),
-    )
-    const language = (yield* provider.getLanguage(model)) as unknown as {
-      models?: { config?: { baseURL?: string } }[]
-    }
-    expect(language.models?.[0]?.config?.baseURL).toBe("https://api.anthropic.com/v1")
-  }),
+//
+// The `beforeAll` above warms `Npm.add("ai-gateway-provider")`, so standalone runs
+// of this test (via `-t`) stay far below the default budget; the explicit 15s keeps
+// the regression itself honest if it is ever run without the shared warm-up.
+it.instance(
+  "cloudflare-ai-gateway anthropic passthrough ignores ANTHROPIC_BASE_URL",
+  () =>
+    Effect.gen(function* () {
+      yield* set("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
+      yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
+      yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
+      yield* set("CLOUDFLARE_API_TOKEN", "test-token")
+      const provider = yield* Provider.Service
+      const model = yield* provider.getModel(
+        ProviderV2.ID.make("cloudflare-ai-gateway"),
+        ModelV2.ID.make("anthropic/claude-sonnet-4-6"),
+      )
+      const language = (yield* provider.getLanguage(model)) as unknown as {
+        models?: { config?: { baseURL?: string } }[]
+      }
+      expect(language.models?.[0]?.config?.baseURL).toBe("https://api.anthropic.com/v1")
+    }),
+  15_000,
 )
