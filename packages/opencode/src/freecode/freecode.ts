@@ -15,8 +15,11 @@ export const Product = {
   globalConfigDir: "freecode",
   /** Project-local config directory name. */
   projectConfigDir: ".freecode",
-  /** FreeCode docs entry point. The TUI help/docs links open this. */
-  docsUrl: "https://github.com/yyl66624/freecode/blob/main/docs/README.md",
+  /** FreeCode docs entry point. The TUI help/docs links open this.
+   *
+   * Points at `freecode-main`, the repository's default branch — `blob/main/...`
+   * 404s because no `main` branch exists. */
+  docsUrl: "https://github.com/yyl66624/freecode/blob/freecode-main/docs/README.md",
 } as const
 
 /**

@@ -17,6 +17,7 @@ export const TUI_PRODUCT = {
   name: "FreeCode",
   /** Terminal window/tab title prefix, 2 chars so it fits alongside session titles. */
   titlePrefix: "FC",
-  /** Docs/help link; same as `FreeCode.Product.docsUrl`. */
-  docsUrl: "https://github.com/yyl66624/freecode/blob/main/docs/README.md",
+  /** Docs/help link; same as `FreeCode.Product.docsUrl` (`freecode-main`, the
+   * repository's default branch — there is no `main` branch to link to). */
+  docsUrl: "https://github.com/yyl66624/freecode/blob/freecode-main/docs/README.md",
 } as const
