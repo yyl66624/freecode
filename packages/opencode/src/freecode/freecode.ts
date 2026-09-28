@@ -18,19 +18,26 @@ export const Product = {
 } as const
 
 /**
- * Config entry names searched inside a config directory, earliest first.
+ * Config entry names read inside a config directory.
+ *
+ * The config-directory loop merges these names in array order with a later name
+ * winning, i.e. lowest precedence first. `ConfigPaths.projectFiles` reverses
+ * the list for the project-root walk, so the files it returns are lowest
+ * precedence first there too.
  *
  * `.opencode` directories answer only to their own name; `.freecode` (and the
  * global root) read all three, so a project can migrate file by file. `config`
- * stays last because upstream also accepts it as a bare legacy filename.
+ * is kept as upstream's bare legacy filename.
  */
 export const configFileNames = ["freecode", "opencode", "config"] as const
 
 /**
  * Project config directory names recognized while walking up from the working
- * directory. `.opencode` remains supported for backward compatibility.
+ * directory, lowest precedence first: `.opencode` stays supported for backward
+ * compatibility with an existing OpenCode project, but `.freecode` is listed
+ * last so a FreeCode directory overrides the OpenCode one beside it.
  */
-export const projectConfigDirs = [Product.projectConfigDir, ".opencode"] as const
+export const projectConfigDirs = [".opencode", Product.projectConfigDir] as const
 
 /**
  * FreeCode's release version.
