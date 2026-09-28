@@ -2176,20 +2176,22 @@ it.instance("cloudflare-ai-gateway passthrough models resolve without an injecte
 // Where the hard throw actually lives, and why the "delete the step model's
 // fetch" reproduction cannot reach it.
 //
-// `processModelRequest` guards on the wrapper's OWN `config`:
+// `processModelRequest` guards on the STEP MODEL's `config`, not the wrapper's:
 //
-//   if (!model.config || !Object.keys(model.config).includes("fetch")) throw
+//   for (const model of this.models) {
+//     if (!model.config || !Object.keys(model.config).includes("fetch")) throw …
+//     model.config.fetch = (url, request) => { … }   // installed right after
 //
-// The wrapper's `config` is the one `createAiGateway` was constructed with
-// (accountId / gateway / apiKey / options) and it never carries `fetch` of its
-// own; resolveSDK merges one in before the provider is used, and
-// `processModelRequest` is only ever called through the language model the
-// provider returns. The step model's `config` - the object the triage proposed
-// deleting `fetch` from - is a DIFFERENT object, built by the bare upstream
-// provider, and the guard does not read it.
+// So the guard reads `this.models[step].config` - the config `@ai-sdk/anthropic`
+// built for the step model - while `this.config` (accountId / gateway / apiKey /
+// options) is a different object it never reads. And because the very next line
+// installs `fetch` unconditionally, the guard only requires the step model to
+// HAVE a config object, which it always does. That is why deleting the step
+// model's `fetch` cannot reach the throw: there is no supported way to build a
+// step model without a config.
 //
-// This test records that shape so the distinction stays checkable.
-it.instance("ai-gateway-provider guards on the wrapper config, not the step model", () =>
+// This test records the two-object shape so the distinction stays checkable.
+it.instance("ai-gateway-provider guards on the step model config, not the wrapper config", () =>
   Effect.gen(function* () {
     yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
     yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")

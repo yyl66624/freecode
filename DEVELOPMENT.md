@@ -1085,38 +1085,49 @@ HEAD — three of those five now pass — which is the same run-form drift FREE-
 was opened over. Treat the pair above as the current measurement and state the
 three elements (value + run form + environment) whenever citing it.
 
-### FREE-26: what the hard throw actually guards (measured, `1736527`)
+### FREE-26: what the hard throw actually guards (measured, `175a4b3`)
 
 Earlier notes here describe deleting `models[0].config.fetch` as the way to
-reach `Sorry, but provider "anthropic.messages" is currently not supported`.
-That is wrong, and the reason is worth keeping because it took several attempts
-to see:
+reach `Sorry, but provider "anthropic.messages" is currently not supported`,
+and one revision of this section then described the guard as reading "the
+wrapper's own config". **Both are wrong**, in opposite directions, and the
+correct mechanism matters because it is what makes the throw unreachable:
 
-`processModelRequest` guards on the **wrapper's own** `config`:
-
+```js
+// ai-gateway-provider@3.2.0 dist/index.mjs:554-560
+async processModelRequest(options, modelMethod) {
+  const requests = [];
+  for (const model of this.models) {                       // model = this.models[step]
+    if (!model.config || !Object.keys(model.config).includes("fetch"))
+      throw new Error(`Sorry, but provider "${model.provider}" is currently not supported, …`)
+    model.config.fetch = (url, request) => { … }           // installed unconditionally right after
 ```
-if (!model.config || !Object.keys(model.config).includes("fetch")) throw ...
-```
 
-That object is the one `createAiGateway({ accountId, gateway, apiKey })` was
-built with — keys `accountId` / `gateway` / `apiKey` / `options`, and **never**
-`fetch` of its own. The step model's `config` (built by the bare upstream
-provider: `provider` / `baseURL` / `headers` / `fetch` / …) is a **different
-object**, and the guard does not read it. So:
+Three facts, each measured:
 
-| Mutation | Result (measured) |
+1. The guard reads **`this.models[step].config`** — the step model's config, not
+   `this.config` (the wrapper's own, whose keys are `accountId` / `gateway` /
+   `apiKey` / `options`). The earlier "wrapper's own config" wording was
+   backwards.
+2. The very next line **installs** `fetch` on that same config unconditionally.
+   So the guard does not require a `fetch` to have arrived from anywhere — it
+   requires the step model to *have a config object at all*, which
+   `@ai-sdk/anthropic`'s `AnthropicMessagesLanguageModel` always does.
+3. Consequently the throw is unreachable by construction: there is no way to
+   build a step model through the supported constructors that lacks a config.
+
+| Mutation | Result (measured, `175a4b3`) |
 | --- | --- |
-| delete `models[0].config.fetch`, call `doGenerate` | request still goes to `gateway.ai.cloudflare.com`; surfaces the gateway's own `invalid x-api-key` |
+| delete `models[0].config.fetch`, call the step's `doGenerate` | request still goes to `gateway.ai.cloudflare.com`; surfaces the gateway's own `invalid x-api-key` |
+| delete `models[0].config.fetch`, call `processModelRequest` | same — the loop reinstalls it before the guard matters |
 | no mutation at all | same |
 
-The throw is therefore not reachable by that route, before or after `11c33fc`.
-This does not change what `11c33fc` fixed (the bundled-loader short-circuit
-bypassing the provider's `getModel` — a real path-correctness defect, see
-above), but it removes the reachability argument that was attached to it, and
-with it any claim that a user could have hit this error.
-
-The regression case added in `1736527` pins the two-object distinction so this
-cannot quietly drift back into "delete the step fetch and watch it throw".
+`11c33fc` is unaffected by this correction: it fixed the bundled-loader
+short-circuit bypassing the provider's `getModel` (a real path-correctness
+defect), not a user-visible failure. The `1736527` case now named
+"guards on the step model config, not the wrapper config" pins the two-object
+structure so this cannot drift back into "delete the step fetch and watch it
+throw".
 
 ### FREE-26 baseline numbers: which fingerprint they belong to (09-28)
 
@@ -1126,12 +1137,22 @@ baseline on its own:
 
 | Side | Form | `test/config test/provider test/freecode` |
 | --- | --- | --- |
-| 13/0 side (core-dev, qa, and re-measured 09-28) | serial, cwd `packages/opencode`, `.runtime/bin/bun` 1.4.2 | **1290 pass / 3 skip / 2 fail** |
-| 9/4 side (the dissenting observer) | described as the same form | reported 1285 pass / 3 skip / 6 fail (the 2 above plus 4 cf-ai-gateway) |
+| 13/0 side (core-dev, qa, pace) | serial, cwd `packages/opencode`, `.runtime/bin/bun` 1.4.2 | **~1290 pass / 3 skip / 2 fail** |
+| 9/4 side (the dissenting observer) | described as the same form | reported ~1285 pass / 3 skip / 6 fail (the 2 above plus 4 cf-ai-gateway) |
 
-State the fingerprint whenever citing either. The 2-fail figure is the 13/0
-side's measurement, not a universal baseline; the "5 fail" figure recorded
-earlier in this file predates both and no longer reproduces here.
+**Read this literally:** the 2-fail figure is the **13/0 side's fingerprint
+measurement** (core-dev / qa / pace) — it is not the baseline for the other
+side, and citing it as "the" baseline repeats the mistake FREE-26 exists to
+document. Under the 9/4 side's fingerprint the full suite reports 6 fail: the
+same 2 config/MCP cases plus 4 from `cf-ai-gateway-e2e.test.ts`. Those 4 are the
+test harness's own (it calls `ai-gateway-provider` directly and never reaches
+FreeCode's `resolveSDK`), orthogonal to the `11c33fc` fix, and tracked rather
+than blocking. Where the two sides disagree, this project takes the majority
+(13/0) side — the 09-25 2:1 rule — which is why 2 fail is the number to quote
+without the caveat spelled out, but only ever *with* the fingerprint named.
+
+The "5 fail" figure recorded earlier in this file predates both sides' current
+measurements and no longer reproduces on this HEAD.
 
 Re-measured 09-28 (`4f296d0`) on three dependency views — the repo root store,
 `.runtime/qa-free31/wt-288c00a` and `.runtime/qa-free31/wt-c4604f6` (both
