@@ -1085,6 +1085,39 @@ HEAD — three of those five now pass — which is the same run-form drift FREE-
 was opened over. Treat the pair above as the current measurement and state the
 three elements (value + run form + environment) whenever citing it.
 
+### FREE-26: what the hard throw actually guards (measured, `1736527`)
+
+Earlier notes here describe deleting `models[0].config.fetch` as the way to
+reach `Sorry, but provider "anthropic.messages" is currently not supported`.
+That is wrong, and the reason is worth keeping because it took several attempts
+to see:
+
+`processModelRequest` guards on the **wrapper's own** `config`:
+
+```
+if (!model.config || !Object.keys(model.config).includes("fetch")) throw ...
+```
+
+That object is the one `createAiGateway({ accountId, gateway, apiKey })` was
+built with — keys `accountId` / `gateway` / `apiKey` / `options`, and **never**
+`fetch` of its own. The step model's `config` (built by the bare upstream
+provider: `provider` / `baseURL` / `headers` / `fetch` / …) is a **different
+object**, and the guard does not read it. So:
+
+| Mutation | Result (measured) |
+| --- | --- |
+| delete `models[0].config.fetch`, call `doGenerate` | request still goes to `gateway.ai.cloudflare.com`; surfaces the gateway's own `invalid x-api-key` |
+| no mutation at all | same |
+
+The throw is therefore not reachable by that route, before or after `11c33fc`.
+This does not change what `11c33fc` fixed (the bundled-loader short-circuit
+bypassing the provider's `getModel` — a real path-correctness defect, see
+above), but it removes the reachability argument that was attached to it, and
+with it any claim that a user could have hit this error.
+
+The regression case added in `1736527` pins the two-object distinction so this
+cannot quietly drift back into "delete the step fetch and watch it throw".
+
 ## Worktree isolation
 
 OpenCode's permission system is not a sandbox, and two agents editing one checkout
