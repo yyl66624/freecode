@@ -1118,6 +1118,31 @@ with it any claim that a user could have hit this error.
 The regression case added in `1736527` pins the two-object distinction so this
 cannot quietly drift back into "delete the step fetch and watch it throw".
 
+### FREE-26 baseline numbers: which fingerprint they belong to (09-28)
+
+The fail counts quoted around FREE-26 come from two different observers whose
+environment fingerprints have never been reconciled, so neither is "the"
+baseline on its own:
+
+| Side | Form | `test/config test/provider test/freecode` |
+| --- | --- | --- |
+| 13/0 side (core-dev, qa, and re-measured 09-28) | serial, cwd `packages/opencode`, `.runtime/bin/bun` 1.4.2 | **1290 pass / 3 skip / 2 fail** |
+| 9/4 side (the dissenting observer) | described as the same form | reported 1285 pass / 3 skip / 6 fail (the 2 above plus 4 cf-ai-gateway) |
+
+State the fingerprint whenever citing either. The 2-fail figure is the 13/0
+side's measurement, not a universal baseline; the "5 fail" figure recorded
+earlier in this file predates both and no longer reproduces here.
+
+Re-measured 09-28 (`4f296d0`) on three dependency views — the repo root store,
+`.runtime/qa-free31/wt-288c00a` and `.runtime/qa-free31/wt-c4604f6` (both
+detached worktrees carrying their own `node_modules/.bun`) — all three resolve
+`@ai-sdk/anthropic@3.0.111+d6123d32214422cb`, `ai-gateway-provider@3.2.0+39911914b0439de0`
+and the same `@ai-sdk/provider-utils` set, and all three run
+`cf-ai-gateway-e2e.test.ts` at **13/0**. So a divergent store or hash does not
+explain the split on this machine, and the `@ai-sdk/gateway` hash variants
+flagged earlier are on a different code path (`anthropic/*` resolves
+`@ai-sdk/anthropic`, not `@ai-sdk/gateway`).
+
 ## Worktree isolation
 
 OpenCode's permission system is not a sandbox, and two agents editing one checkout
